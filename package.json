@@ -1,0 +1,57 @@
+{
+  "name": "chainfeed",
+  "version": "0.0.1",
+  "description": "Cardano-native oracle aggregator with x402 payment settlement, built on SAP CAP and ODATANO.",
+  "license": "Apache-2.0",
+  "private": true,
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@odatano/core": "^1.7.4",
+    "@sap/cds": "^9",
+    "express": "^4"
+  },
+  "devDependencies": {
+    "@cap-js/cds-types": "^0.16.0",
+    "@cap-js/sqlite": "^2",
+    "@sap/cds-dk": "^9",
+    "@types/express": "^5.0.6",
+    "@types/node": "^25.6.0",
+    "bip39": "^3.1.0",
+    "cross-env": "^10.1.0",
+    "tsx": "^4.21.0",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.59.1"
+  },
+  "scripts": {
+    "start": "cross-env CDS_TYPESCRIPT=1 NODE_OPTIONS=\"--import tsx\" cds-serve",
+    "dev": "cross-env CDS_TYPESCRIPT=1 NODE_OPTIONS=\"--import tsx\" cds watch",
+    "build": "cds build --production && tsc",
+    "typecheck": "tsc --noEmit",
+    "check-no-js": "node -e \"const r=require('child_process').execSync('git ls-files srv scripts',{encoding:'utf8'}).split('\\n').filter(f=>/^(srv|scripts)\\/.+\\.js$/.test(f));if(r.length){console.error('TS-only policy: forbidden .js files:\\n'+r.join('\\n'));process.exit(1)}\"",
+    "test": "echo \"no tests yet\" && exit 0",
+    "lint": "eslint ."
+  },
+  "cds": {
+    "requires": {
+      "db": {
+        "kind": "sqlite",
+        "credentials": {
+          "url": ":memory:"
+        }
+      },
+      "odatano-core": {
+        "network": "preprod",
+        "backends": [
+          "blockfrost"
+        ],
+        "txBuilders": [
+          "buildooor"
+        ],
+        "primaryTimeoutMs": 30000,
+        "indexTtlMs": 3600000
+      }
+    }
+  }
+}

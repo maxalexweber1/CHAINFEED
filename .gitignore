@@ -1,0 +1,52 @@
+# CAP CHAINFEED
+_out
+*.db
+*.sqlite
+connection.properties
+default-*.json
+.cdsrc-private.json
+gen/
+node_modules/
+target/
+
+# Web IDE, App Studio
+.che/
+.gen/
+
+# MTA
+*_mta_build_tmp
+*.mtar
+mta_archives/
+
+# Other
+.DS_Store
+*.orig
+*.log
+
+*.iml
+*.flattened-pom.xml
+
+# IDEs
+# .vscode
+# .idea
+
+# @cap-js/cds-typer
+@cds-models
+
+# TypeScript build output
+dist/
+*.tsbuildinfo
+
+# Local secrets — NEVER commit
+.env
+.env.local
+.env.*.local
+*.mnemonic
+.claude
+.vscode
+
+
+CLAUDE.MD
+impl_plan.md
+adr/
+research/
