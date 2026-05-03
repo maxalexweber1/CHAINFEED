@@ -6,9 +6,19 @@
  * computes a single canonical "ADA in USD" number across Minswap's pools
  * with sane volume weighting. One round-trip, no decimals fiddling.
  *
+ * Why we no longer use `/v1/assets/{id}/metrics?currency=ada` for other
+ * pairs: the `currency` query parameter is silently ignored. For stables
+ * (DJED, iUSD, USDM, USDA) the response is always USD-denominated; for
+ * volatile tokens it appears ADA-denominated, but the absence of a
+ * reliable indicator (categories field is empty for many tokens) makes
+ * unit interpretation guesswork. Verified 2026-05-02 with curl probes
+ * across 8 tokens including stables and volatiles. We rely on direct DEX
+ * adapters (sundae, wingriders, minswap-v2) for non-USD pairs.
+ *
  * USDM ≠ USD strictly (USDM was trading at $1.008 at research time), but
- * for Phase 2 v0.1 we expose only `ADA-USD` here. ADA-USDM coverage comes
- * from SundaeSwap V3 + DexHunter, which read real ADA/USDM pool data.
+ * for ADA-USD the aggregator is fine; ADA-USDM coverage comes from
+ * SundaeSwap V3 + Minswap V2 + WingRiders V2, all reading real
+ * ADA/USDM pool data.
  *
  * Source: docs.minswap.org/developer/aggregator-api
  */
@@ -35,6 +45,7 @@ async function getPrice(pair: string): Promise<PriceQuote> {
   }
 
   return {
+    kind: 'price',
     sourceName: SOURCE_NAME,
     pair,
     price,

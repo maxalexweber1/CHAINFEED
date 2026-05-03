@@ -180,6 +180,38 @@ async function main() {
     assert.equal((q.rawPayload as { rawPrice: string }).rawPrice, '4000000');
   });
 
+  await t('USDM-RESERVES returns AttestationQuote (kind=attestation, unit=usd)', async () => {
+    process.env.CHARLI3_NETWORK = 'mainnet';
+    // Mehen publishes reserves with the same datum CBOR shape as price feeds —
+    // CDDL-identical (Constr 0 → Constr 2 → PlutusMap{0,1,2,3}). Only the
+    // adapter's `kind` flag differs. 14_500_000 raw with precision 6 = $14.5M.
+    const reservesDatum = buildDatum({
+      price:     14_500_000_000_000,   // 14.5M USD with precision 6
+      timestamp: now - 30 * 60 * 1000,
+      expiry:    now + 24 * 60 * 60 * 1000,
+      precision: 6,
+    });
+    let captured: { address?: string; policy?: string; assetName?: string } = {};
+    bridge.getUtxosWithAsset = async (address: string, policy: string, assetName: string) => {
+      captured = { address, policy, assetName };
+      return [{ txHash: '99'.repeat(32), outputIndex: 0 }];
+    };
+    bridge.getTransactionByHash = async () => ({ outputs: [{ inlineDatum: reservesDatum }] });
+
+    const q = await charli3.getPrice('USDM-RESERVES');
+    assert.equal(q.kind, 'attestation');
+    assert.equal(q.sourceName, 'charli3');
+    assert.equal(q.pair, 'USDM-RESERVES');
+    assert.equal(q.unit, 'usd');
+    assert.equal(q.value, 14_500_000);   // 14_500_000_000_000 / 10^6
+    assert.equal(q.txHash, '99'.repeat(32));
+    // Filtered by the documented USDM-RESERVES address + policy + C3AS hex.
+    assert.equal(captured.address,   'addr1w88fmwyufz9vdqkukzhaerjxcfm488wsnyrft9cpjtd4utsnw5ym7');
+    assert.equal(captured.policy,    'e7d54c2f5c81206e307e528855bb51e5ffe9295e3db348c4be74deec');
+    assert.equal(captured.assetName, C3AS_ASSETHEX);
+    process.env.CHARLI3_NETWORK = 'preprod';
+  });
+
   await t('legacy variant feeds use the OracleFeed asset name', async () => {
     process.env.CHARLI3_NETWORK = 'mainnet';
     let captured: { policy?: string; assetName?: string } = {};

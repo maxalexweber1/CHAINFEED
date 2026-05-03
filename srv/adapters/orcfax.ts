@@ -55,17 +55,15 @@ const NETWORK_CONFIG: Readonly<Record<string, NetworkCfg>> = Object.freeze({
 
 // Per-pair feed metadata. `feedIdPrefix` MUST end with the trailing slash
 // so that `CER/ADA-USD/3` matches but `CER/ADA-USDM/3` does not.
+//
+// Scope (post 2026-05-02 pivot): only stable-denominated ADA pairs. Other
+// Orcfax mainnet pairs (FACT-ADA, CBLP-ADA, SNEK-ADA, MIN-ADA, IAG-ADA,
+// LQ-ADA, WMTX-ADA, INDY-ADA) deliberately removed — out of CHAINFEED scope.
 const FEED_CONFIG: Readonly<Record<string, FeedCfg>> = Object.freeze({
   'ADA-USD':  { feedIdPrefix: 'CER/ADA-USD/',  intervalSeconds: 3600,  stalenessFactor: 1.5 },
-  'FACT-ADA': { feedIdPrefix: 'CER/FACT-ADA/', intervalSeconds: 21600, stalenessFactor: 1.5 },
-  'CBLP-ADA': { feedIdPrefix: 'CER/CBLP-ADA/', intervalSeconds: 7200,  stalenessFactor: 1.5 },
-  'SNEK-ADA': { feedIdPrefix: 'CER/SNEK-ADA/', intervalSeconds: 3600,  stalenessFactor: 1.5 },
-  'MIN-ADA':  { feedIdPrefix: 'CER/MIN-ADA/',  intervalSeconds: 3600,  stalenessFactor: 1.5 },
-  'IAG-ADA':  { feedIdPrefix: 'CER/IAG-ADA/',  intervalSeconds: 3600,  stalenessFactor: 1.5 },
-  'LQ-ADA':   { feedIdPrefix: 'CER/LQ-ADA/',   intervalSeconds: 3600,  stalenessFactor: 1.5 },
+  'ADA-USDM': { feedIdPrefix: 'CER/ADA-USDM/', intervalSeconds: 3600,  stalenessFactor: 1.5 },
   'ADA-DJED': { feedIdPrefix: 'CER/ADA-DJED/', intervalSeconds: 3600,  stalenessFactor: 1.5 },
   'ADA-iUSD': { feedIdPrefix: 'CER/ADA-iUSD/', intervalSeconds: 3600,  stalenessFactor: 1.5 },
-  'ADA-USDM': { feedIdPrefix: 'CER/ADA-USDM/', intervalSeconds: 3600,  stalenessFactor: 1.5 },
 });
 
 interface DecodedStatement {
@@ -212,6 +210,7 @@ async function getPrice(pair: string, opts: GetPriceOpts = {}): Promise<PriceQuo
   const validUntil = winner.stmt.createdAt + staleAfterMs;
 
   return {
+    kind: 'price',
     sourceName: SOURCE_NAME,
     pair,
     price,

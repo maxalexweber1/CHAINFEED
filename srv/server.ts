@@ -35,19 +35,39 @@ const log = cds.log('chainfeed');
 
   // Lazy-require so the middleware module isn't loaded when x402 is disabled.
   const { express: x402 } = require('./middleware/x402') as typeof import('./middleware/x402');
+  const { GATED_ROUTE_PRICING } = require('./x402/pricing') as typeof import('./x402/pricing');
 
+  // Paths NOT listed in GATED_ROUTE_PRICING are FREE by default (the
+  // middleware passes through any unmapped route under `routePricing`).
+  // The free tier is intentionally the public-dashboard surface:
+  //   - getStableHealth, getOhlcv, getServiceStatus, getStableConvergence
+  //     → power the "Cardano stablecoin health" portal (read-only)
+  //   - buildPaymentTx → free helper that returns an unsigned tx for the
+  //     browser CIP-30 buyer; the *paid* call comes when the buyer POSTs
+  //     the gated route with X-PAYMENT
+  //   - listSubscriptions / cancelSubscription → ownership-gated, free
+  // The paid tier is the agent / B2B premium surface — see
+  // srv/x402/pricing.ts for the canonical price list.
   app.use('/odata/v4/price', x402({
-    feedKind:    'aggregated',
-    description: 'CHAINFEED aggregated oracle price (mock-USDM on preprod)',
-    routePricing: {
-      // raw asset units (6 decimals → 10000 = 0.01 USDM, 50000 = 0.05 USDM)
-      Prices:                  '10000',
-      Sources:                 '10000',
-      getBestPrice:            '10000',
-      getTWAP:                 '20000',
-      getArbitrageOpportunities: '50000',
-    },
+    feedKind:     'aggregated',
+    description:  'CHAINFEED aggregated oracle price (mock-USDM on preprod)',
+    routePricing: { ...GATED_ROUTE_PRICING },
   }));
 
     log.info('x402 mounted on /odata/v4/price');
+  });
+
+// ── ODATANO-WATCH event subscriptions ────────────────────────────────
+// Register on `served` (after CAP has booted every service, including
+// the watch plugin's CardanoWatcherAdminService). Failure here logs but
+// doesn't crash — the system falls back to TTL-based polling.
+(cds as unknown as { on(ev: string, handler: () => void | Promise<void>): void })
+  .on('served', async () => {
+    try {
+      const { registerWatchSubscriptions } =
+        require('./external/watch-subscriptions') as typeof import('./external/watch-subscriptions');
+      await registerWatchSubscriptions();
+    } catch (err) {
+      log.warn(`watch subscriptions skipped: ${(err as Error)?.message ?? err}`);
+    }
   });

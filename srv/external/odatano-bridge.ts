@@ -40,10 +40,45 @@ interface RawUtxo {
   amount?: RawAmount[];
   datumHash?: string;
   scriptRef?: string;
+  /**
+   * Inline datum hex — auto-populated since @odatano/core 1.7.6 across
+   * Blockfrost + Koios backends. Eliminates the previous "fetch full tx
+   * just to read one output's datum" round-trip pattern.
+   */
+  inlineDatum?: string | null;
+}
+
+/**
+ * Native-asset metadata as returned by ODATANO's `getAssetInfo`. Available
+ * since 1.7.6. Cross-backend (Blockfrost + Koios). Field availability
+ * differs per backend — `initialMintTime` is null on Blockfrost, registry
+ * fields are null on Koios for non-CIP-26-listed assets.
+ */
+interface AssetInfo {
+  unit: string;
+  policyId: string;
+  assetNameHex: string;
+  assetName: string | null;
+  fingerprint: string;
+  totalSupply: string;
+  mintOrBurnCount: number;
+  initialMintTxHash: string | null;
+  initialMintTime: string | null;
+  onchainMetadata: unknown;
+  registryName?: string | null;
+  registryTicker?: string | null;
+  registryDecimals?: number | null;
+  registryDescription?: string | null;
+  registryUrl?: string | null;
+  registryLogo?: string | null;
 }
 
 interface CardanoClient {
   getAddressUtxos(address: string): Promise<RawUtxo[]>;
+  /** Since 1.7.6 — Koios-only. Throws on Blockfrost/Ogmios. */
+  getCredentialUtxos(credHash: string): Promise<RawUtxo[]>;
+  /** Since 1.7.6 — Blockfrost+Koios. Per-backend field availability differs. */
+  getAssetInfo(unit: string): Promise<AssetInfo>;
   getTransaction(txHash: string): Promise<unknown>;
   getProtocolParameters(): Promise<unknown>;
   submitTransaction(cborHex: string): Promise<string>;
@@ -70,12 +105,13 @@ async function ensureInit(): Promise<unknown> {
 }
 
 /**
- * Map a Blockfrost-shape UTxO (as returned by CardanoClient.getAddressUtxos)
- * to our flat Utxo shape.
+ * Map a Blockfrost / Koios UTxO into our flat Utxo shape.
  *
- * Note: getAddressUtxos returns the lite shape — `inlineDatumHex` is NOT
- * populated. Use `getTransactionByHash` if you need datum decoding for a
- * specific UTxO.
+ * Since @odatano/core 1.7.6, `inlineDatum` is auto-populated on the
+ * RawUtxo across both backends. We pass it through as `inlineDatumHex`
+ * — eliminating the historical pattern of "fetch full tx to read one
+ * output's datum" that previously slowed iUSD-CDP-like enumeration to
+ * 30+ seconds on multi-UTxO scripts.
  */
 function mapUtxo(u: RawUtxo): Utxo {
   const amount = u.amount ?? [];
@@ -104,11 +140,16 @@ function mapUtxo(u: RawUtxo): Utxo {
     lovelace:            String(lovelace),
     assets,
     dataHash:            u.datumHash ?? undefined,
+    inlineDatumHex:      u.inlineDatum ?? undefined,
     referenceScriptHash: u.scriptRef ?? undefined,
   };
 }
 
-/** Fetch all UTxOs at a given Bech32 address (lite shape — no inline datum). */
+/**
+ * Fetch all UTxOs at a Bech32 address. Since ODATANO 1.7.6, `inlineDatumHex`
+ * is auto-populated on each UTxO — no separate `getTransactionByHash` call
+ * required for datum decoding.
+ */
 async function getUtxosAtAddress(address: string): Promise<Utxo[]> {
   if (!address || typeof address !== 'string') {
     throw new TypeError('getUtxosAtAddress: address must be a non-empty string');
@@ -117,6 +158,44 @@ async function getUtxosAtAddress(address: string): Promise<Utxo[]> {
   const client = od.getCardanoClient();
   const rows = await client.getAddressUtxos(address);
   return Array.isArray(rows) ? rows.map(mapUtxo) : [];
+}
+
+/**
+ * Fetch all UTxOs sharing a 28-byte payment credential (script-hash for
+ * scripts, key-hash for wallets). Captures both bech32 forms (with and
+ * without stake credential) in one round-trip — solves the "Indigo CDP
+ * manager has two bech32 variants" problem natively.
+ *
+ * Since ODATANO 1.7.6. Backend: **Koios-only** — throws on
+ * Blockfrost/Ogmios deployments because they don't support the
+ * credential-based query natively. The bridge surfaces that as a clear
+ * error so callers know to either change backend config or fall back to
+ * per-bech32 enumeration.
+ */
+async function getUtxosAtCredential(credHash: string): Promise<Utxo[]> {
+  if (!credHash || typeof credHash !== 'string' || credHash.length !== 56 || !/^[0-9a-f]+$/i.test(credHash)) {
+    throw new TypeError('getUtxosAtCredential: credHash must be 56-char lowercase hex (28-byte payment credential)');
+  }
+  await ensureInit();
+  const client = od.getCardanoClient();
+  const rows = await client.getCredentialUtxos(credHash);
+  return Array.isArray(rows) ? rows.map(mapUtxo) : [];
+}
+
+/**
+ * Fetch native-asset metadata (total supply, mint/burn count, registry
+ * fields, …). Since ODATANO 1.7.6. Cross-backend (Blockfrost + Koios) —
+ * field availability differs per backend.
+ *
+ * `unit` is `policyId + assetNameHex` concatenated, lowercase hex.
+ */
+async function getAssetInfo(unit: string): Promise<AssetInfo> {
+  if (!unit || typeof unit !== 'string') {
+    throw new TypeError('getAssetInfo: unit (policyId + assetNameHex) must be a non-empty string');
+  }
+  await ensureInit();
+  const client = od.getCardanoClient();
+  return client.getAssetInfo(unit.toLowerCase());
 }
 
 /** Fetch UTxOs at an address that hold a specific native asset. */
@@ -187,7 +266,9 @@ async function shutdown(): Promise<void> {
 // Plain CJS export so tests can monkey-patch bridge methods at runtime.
 export = {
   getUtxosAtAddress,
+  getUtxosAtCredential,    // since ODATANO 1.7.6 — Koios-only
   getUtxosWithAsset,
+  getAssetInfo,            // since ODATANO 1.7.6
   getTransactionByHash,
   getProtocolParameters,
   submitTransaction,

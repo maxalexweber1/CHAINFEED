@@ -62,9 +62,15 @@ t('decode rejects Constr 0 with too few fields', () => {
 });
 
 t('supportsPair recognises configured pairs', () => {
+  // Post-pivot scope: only stable-denominated ADA pairs.
   assert.equal(supportsPair('ADA-USD'),  true);
-  assert.equal(supportsPair('FACT-ADA'), true);
-  assert.equal(supportsPair('FOO-BAR'),  false);
+  assert.equal(supportsPair('ADA-USDM'), true);
+  assert.equal(supportsPair('ADA-DJED'), true);
+  assert.equal(supportsPair('ADA-iUSD'), true);
+  // Removed in pivot — should not be recognised any more.
+  assert.equal(supportsPair('FACT-ADA'),  false);
+  assert.equal(supportsPair('SNEK-ADA'),  false);
+  assert.equal(supportsPair('FOO-BAR'),   false);
 });
 
 console.log(`\n${n - fails}/${n} passed`);

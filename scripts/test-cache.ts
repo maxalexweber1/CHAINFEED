@@ -38,7 +38,7 @@ function makeStubAdapter(): StubAdapter {
         await new Promise<void>(r => setTimeout(r, d));
       }
       if (nextThrows) { nextThrows = false; throw new Error('upstream-failed'); }
-      return { sourceName: 'stub', pair, price: 1.0, timestamp: Date.now(), rawPayload: { calls } };
+      return { kind: 'price', sourceName: 'stub', pair, price: 1.0, timestamp: Date.now(), rawPayload: { calls } };
     },
     callCount: () => calls,
     setNextDelay: (ms: number) => { nextDelayMs = ms; },
@@ -54,7 +54,7 @@ console.log('cache (stale-while-revalidate) ────────────
 await t('cold miss → calls upstream once, returns quote', async () => {
   const stub = makeStubAdapter();
   const cached = withCache(stub, { ttlMs: 1000 });
-  const q = await cached.getPrice('A');
+  const q = await cached.getPrice('A') as PriceQuote;
   assert.equal(stub.callCount(), 1);
   assert.equal(q.price, 1.0);
 });
@@ -110,7 +110,7 @@ await t('concurrent cold-miss reads dedupe to one upstream call', async () => {
   const cached = withCache(stub, { ttlMs: 1000 });
   const [a, b, c] = await Promise.all([
     cached.getPrice('A'), cached.getPrice('A'), cached.getPrice('A'),
-  ]);
+  ]) as [PriceQuote, PriceQuote, PriceQuote];
   assert.equal(stub.callCount(), 1, 'three concurrent miss-reads should share one upstream call');
   assert.equal(a.price, b.price);
   assert.equal(b.price, c.price);
@@ -122,9 +122,49 @@ await t('failed cold-miss propagates error and does not poison cache', async () 
   const cached = withCache(stub, { ttlMs: 1000 });
   await assert.rejects(() => cached.getPrice('A'), /upstream-failed/);
   // Next call should retry (no poisoned entry)
-  const q = await cached.getPrice('A');
+  const q = await cached.getPrice('A') as PriceQuote;
   assert.equal(q.price, 1.0);
   assert.equal(stub.callCount(), 2);
+});
+
+await t('status(): empty before any read', async () => {
+  const stub = makeStubAdapter();
+  const cached = withCache(stub, { ttlMs: 1000 });
+  const s = cached.status();
+  assert.equal(s.sourceName, 'stub');
+  assert.equal(s.ttlMs, 1000);
+  assert.equal(s.cachedPairCount, 0);
+  assert.deepEqual(s.pairs, []);
+});
+
+await t('status(): tracks fetched pairs with age + null error', async () => {
+  const stub = makeStubAdapter();
+  const cached = withCache(stub, { ttlMs: 1000 });
+  await cached.getPrice('A');
+  await cached.getPrice('B');
+  const s = cached.status();
+  assert.equal(s.cachedPairCount, 2);
+  assert.deepEqual(s.pairs.map(p => p.pair).sort(), ['A', 'B']);
+  for (const p of s.pairs) {
+    assert.ok(p.fetchedAtIso !== null);
+    assert.ok(p.ageSeconds !== null && p.ageSeconds! >= 0);
+    assert.equal(p.hasInflightRefresh, false);
+    assert.equal(p.lastError, null);
+  }
+});
+
+await t('status(): records lastError on failed background refresh', async () => {
+  const stub = makeStubAdapter();
+  const cached = withCache(stub, { ttlMs: 200 });
+  await cached.getPrice('A');
+  await sleep(250);                     // age ≈ 250ms → stale
+  stub.failNext();
+  await cached.getPrice('A');           // serves stale, fires bg refresh that fails
+  await sleep(50);                      // give bg refresh time to fail
+  const s = cached.status();
+  const a = s.pairs.find(p => p.pair === 'A')!;
+  assert.ok(a.lastError !== null);
+  assert.match(a.lastError!.message, /upstream-failed/);
 });
 
 await t('failed background refresh keeps stale entry usable', async () => {

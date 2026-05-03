@@ -20,14 +20,34 @@
  */
 
 import cds from '@sap/cds';
-import { fanout, sourcesForPair, fanoutDexOnly, dexSourcesForPair } from './adapters/registry';
-import { aggregate, twap, type AggregatedResult } from './aggregation';
+import { fanout, sourcesForPair, fanoutDexOnly, dexSourcesForPair, attestationFanout, getRegistryStatus } from './adapters/registry';
+import { aggregate, pegDeviationBps, twap, type AggregatedResult } from './aggregation';
+import { metadataForPair, metadataForSymbol, STABLE_METADATA } from './lib/stable-metadata';
+import { computeConvergenceMatrix } from './lib/stable-convergence';
+import { buildUnsignedPaymentTx } from './x402/build-unsigned-tx';
+import { buildPaymentRequirements, resolveConfig as resolveX402Config } from './x402/requirements';
+import { fetchStableSupply } from './lib/stable-supply';
+import { executableDepthForToken } from './lib/liquidity-depth';
+import { computeStableHealth } from './lib/stable-health';
+import {
+  bucketSamples, intervalToMs, maxLookbackMsForInterval, isValidInterval,
+  type Interval as OhlcvInterval,
+} from './lib/ohlcv';
+import { buildAuditPack, type AuditPackQuote, type AuditPackSource } from './lib/audit-pack';
+import { generateHmacSecret, validateWebhookUrl } from './lib/alert-detector';
+import { verifyConfirmedPayment, priceForSubscription, USDM_DECIMALS } from './x402/verify-confirmed';
 import type { PriceQuote } from './adapters/types';
 
 const log = cds.log('price-service');
 
-const AGGREGATED_PRICES = 'chainfeed.AggregatedPrices';
-const PRICE_SOURCES     = 'chainfeed.PriceSources';
+const AGGREGATED_PRICES   = 'chainfeed.AggregatedPrices';
+const PRICE_SOURCES       = 'chainfeed.PriceSources';
+const ALERT_SUBSCRIPTIONS = 'chainfeed.AlertSubscriptions';
+
+const SUBSCRIPTION_MIN_THRESHOLD_BPS = 10;       // ≥ 0.10 %
+const SUBSCRIPTION_MAX_THRESHOLD_BPS = 10_000;   // ≤ 100 %
+const SUBSCRIPTION_MIN_VALID_HOURS   = 1;
+const SUBSCRIPTION_MAX_VALID_HOURS   = 24 * 365; // 1 year
 
 /**
  * Persist the aggregated result + per-source audit rows. Best-effort:
@@ -41,6 +61,7 @@ async function persistResult(
   pair: string,
   agg: AggregatedResult,
   quotes: PriceQuote[],
+  pegDevBps: number | null,
 ): Promise<string | null> {
   try {
     const validFromMs = quotes.reduce((m, q) => Math.min(m, q.timestamp ?? Date.now()), Date.now());
@@ -52,12 +73,13 @@ async function persistResult(
     const row = await cds.run(
       INSERT.into(AGGREGATED_PRICES).entries({
         pair,
-        price:        agg.price,
-        sourcesUsed:  agg.sourcesUsed,
-        confidence:   agg.confidence,
-        deviationPct: agg.deviationPct,
-        validFrom:    new Date(validFromMs).toISOString(),
-        validUntil:   new Date(validUntilMs || Date.now()).toISOString(),
+        price:           agg.price,
+        sourcesUsed:     agg.sourcesUsed,
+        confidence:      agg.confidence,
+        deviationPct:    agg.deviationPct,
+        pegDeviationBps: pegDevBps,
+        validFrom:       new Date(validFromMs).toISOString(),
+        validUntil:      new Date(validUntilMs || Date.now()).toISOString(),
       }),
     );
     // CAP returns the inserted entity (or its ID) depending on driver; the
@@ -120,6 +142,261 @@ export = cds.service.impl(async function () {
     };
   });
 
+  this.on('getServiceStatus', async () => {
+    return {
+      serviceUrl:  process.env.CHAINFEED_PUBLIC_URL ?? 'unknown',
+      generatedAt: new Date().toISOString(),
+      adapters:    getRegistryStatus().map(s => ({
+        sourceName:      s.sourceName,
+        ttlMs:           s.ttlMs,
+        cachedPairCount: s.cachedPairCount,
+        pairs:           s.pairs.map(p => ({
+          pair:               p.pair,
+          fetchedAtIso:       p.fetchedAtIso,
+          ageSeconds:         p.ageSeconds,
+          hasInflightRefresh: p.hasInflightRefresh,
+          lastErrorMessage:   p.lastError?.message ?? null,
+          lastErrorAtIso:     p.lastError?.at ?? null,
+        })),
+      })),
+    };
+  });
+
+  this.on('subscribePegAlert', async (req) => {
+    const data = req.data as {
+      pair?: string; thresholdBps?: number | string; webhookUrl?: string;
+      ownerAddr?: string; validUntilHours?: number | string; paymentTxHash?: string;
+    };
+
+    // Input validation — fail fast with 400s for bad shapes.
+    const pair = data?.pair;
+    if (!pair) return req.error(400, 'pair is required');
+    const meta = metadataForPair(pair);
+    if (!meta) return req.error(400, `pair '${pair}' is not a registered stable pair (peg-break alerts only meaningful for stables)`);
+    if (meta.peg !== 'USD') return req.error(501, `peg ${meta.peg} alerts not yet supported`);
+
+    const thresholdBps = Number(data?.thresholdBps);
+    if (!Number.isFinite(thresholdBps) || thresholdBps < SUBSCRIPTION_MIN_THRESHOLD_BPS || thresholdBps > SUBSCRIPTION_MAX_THRESHOLD_BPS) {
+      return req.error(400, `thresholdBps must be ${SUBSCRIPTION_MIN_THRESHOLD_BPS}–${SUBSCRIPTION_MAX_THRESHOLD_BPS}`);
+    }
+
+    let webhookUrl: string;
+    try { webhookUrl = validateWebhookUrl(String(data?.webhookUrl ?? '')); }
+    catch (e) { return req.error(400, `webhookUrl: ${(e as Error).message}`); }
+
+    const ownerAddr = String(data?.ownerAddr ?? '').trim();
+    if (!ownerAddr) return req.error(400, 'ownerAddr is required (Cardano address of the subscriber)');
+
+    const validUntilHours = Number(data?.validUntilHours);
+    if (!Number.isFinite(validUntilHours) || validUntilHours < SUBSCRIPTION_MIN_VALID_HOURS || validUntilHours > SUBSCRIPTION_MAX_VALID_HOURS) {
+      return req.error(400, `validUntilHours must be ${SUBSCRIPTION_MIN_VALID_HOURS}–${SUBSCRIPTION_MAX_VALID_HOURS}`);
+    }
+
+    // ── x402 payment enforcement ───────────────────────────────────
+    // If the service is configured for x402 (X402_PAY_TO + X402_USDM_*
+    // env), require the buyer to provide a paymentTxHash that's
+    // already-confirmed on-chain and pays ≥ priceForSubscription() to
+    // our wallet. Skip the gate on dev nodes that didn't configure x402
+    // (the existing middleware uses the same env-presence pattern).
+    const x402PayTo      = process.env.X402_PAY_TO;
+    const x402UsdmPolicy = process.env.X402_USDM_POLICY;
+    const x402UsdmName   = process.env.X402_USDM_NAME_HEX;
+    const x402Network    = process.env.X402_NETWORK || 'cardano-preprod';
+    const x402Enabled    = !!(x402PayTo && x402UsdmPolicy);
+    const paymentTxHash  = String(data?.paymentTxHash ?? '').trim();
+
+    let priceUnits: bigint = 0n;
+    if (x402Enabled) {
+      try {
+        priceUnits = priceForSubscription(thresholdBps, validUntilHours);
+      } catch (err) {
+        return req.error(400, `pricing failed: ${(err as Error).message}`);
+      }
+      if (!paymentTxHash) {
+        const usdmCost = Number(priceUnits) / 10 ** USDM_DECIMALS;
+        return req.error(402, `payment required: ${usdmCost.toFixed(6)} USDM (${priceUnits} raw units). Submit a tx paying that amount to ${x402PayTo} of asset ${x402UsdmPolicy}${x402UsdmName ?? ''}, then call subscribePegAlert with paymentTxHash=<your-tx-hash>.`);
+      }
+      const verification = await verifyConfirmedPayment({
+        txHash:        paymentTxHash,
+        requiredUnits: priceUnits.toString(),
+        requiredAsset: `${x402UsdmPolicy}${x402UsdmName ?? ''}`,
+        requiredPayTo: x402PayTo!,
+        network:       x402Network,
+        route:         'subscribePegAlert',
+        consumerAddr:  ownerAddr,
+      });
+      if (!verification.ok) {
+        return req.error(402, `x402: ${verification.code} — ${verification.reason}`);
+      }
+      log.info(`subscribePegAlert: x402 verified — paid=${verification.amountUnits} required=${priceUnits} pair=${pair} owner=${ownerAddr}`);
+    } else {
+      log.warn(`subscribePegAlert: x402 disabled (set X402_PAY_TO + X402_USDM_POLICY to enable). Subscription created without payment.`);
+    }
+
+    const hmacSecretHex = generateHmacSecret();
+    const validUntilMs = Date.now() + validUntilHours * 60 * 60 * 1000;
+
+    const inserted = await cds.run(
+      INSERT.into(ALERT_SUBSCRIPTIONS).entries({
+        ownerAddr,
+        pair,
+        thresholdBps,
+        webhookUrl,
+        hmacSecretHex,
+        validUntil:    new Date(validUntilMs).toISOString(),
+        status:        'active',
+        fireCount:     0,
+        paymentTxHash: paymentTxHash || null,
+      }),
+    );
+    const subscriptionId: string | undefined = Array.isArray(inserted)
+      ? (inserted[0] as { ID?: string })?.ID
+      : (inserted as { ID?: string })?.ID;
+    if (!subscriptionId) {
+      log.error(`subscribePegAlert: INSERT did not return ID for pair=${pair} owner=${ownerAddr}`);
+      return req.error(500, 'subscription persist failed');
+    }
+
+    return {
+      subscriptionId,
+      hmacSecretHex,    // returned ONCE; consumer must persist immediately
+      pair,
+      thresholdBps,
+      webhookUrl,
+      validUntil:    new Date(validUntilMs).toISOString(),
+    };
+  });
+
+  this.on('listSubscriptions', async (req) => {
+    const ownerAddr = String((req.data as { ownerAddr?: string })?.ownerAddr ?? '').trim();
+    if (!ownerAddr) return req.error(400, 'ownerAddr is required');
+
+    const rows = await cds.run(
+      SELECT.from(ALERT_SUBSCRIPTIONS)
+        .columns('ID', 'pair', 'thresholdBps', 'webhookUrl', 'validUntil',
+                 'status', 'lastFiredAt', 'fireCount', 'createdAt')
+        .where({ ownerAddr }),
+    ) as Array<Record<string, unknown>>;
+
+    return rows ?? [];
+  });
+
+  this.on('cancelSubscription', async (req) => {
+    const data = req.data as { subscriptionId?: string; ownerAddr?: string };
+    const subscriptionId = String(data?.subscriptionId ?? '').trim();
+    const ownerAddr      = String(data?.ownerAddr ?? '').trim();
+    if (!subscriptionId) return req.error(400, 'subscriptionId is required');
+    if (!ownerAddr)      return req.error(400, 'ownerAddr is required');
+
+    // Ownership check first — return 404 to avoid leaking existence.
+    const existing = await cds.run(
+      SELECT.from(ALERT_SUBSCRIPTIONS)
+        .columns('ID', 'ownerAddr', 'status')
+        .where({ ID: subscriptionId }),
+    ) as Array<{ ID: string; ownerAddr: string; status: string }>;
+    if (!existing || existing.length === 0 || existing[0]!.ownerAddr !== ownerAddr) {
+      return req.error(404, 'subscription not found');
+    }
+    if (existing[0]!.status !== 'active') {
+      return false;   // already cancelled or expired
+    }
+
+    await cds.run(
+      UPDATE(ALERT_SUBSCRIPTIONS)
+        .set({ status: 'cancelled' })
+        .where({ ID: subscriptionId }),
+    );
+    return true;
+  });
+
+  this.on('getAuditPack', async (req) => {
+    const quoteId = (req.data as { quoteId?: string })?.quoteId;
+    if (!quoteId) return req.error(400, 'quoteId is required');
+
+    // 1. Fetch the AggregatedPrices row.
+    const quoteRows = await cds.run(
+      SELECT.from(AGGREGATED_PRICES)
+        .columns('ID', 'pair', 'price', 'sourcesUsed', 'confidence',
+                 'deviationPct', 'pegDeviationBps', 'validFrom', 'validUntil', 'createdAt')
+        .where({ ID: quoteId }),
+    ) as Array<AuditPackQuote>;
+    if (!quoteRows || quoteRows.length === 0) {
+      return req.error(404, `quoteId '${quoteId}' not found`);
+    }
+    const quote = quoteRows[0]!;
+
+    // 2. Fetch the per-source rows.
+    const sourceRows = await cds.run(
+      SELECT.from(PRICE_SOURCES)
+        .columns('ID', 'sourceName', 'price', 'txHash', 'fetchedAt', 'rawPayload')
+        .where({ aggregated_ID: quoteId }),
+    ) as Array<AuditPackSource>;
+
+    // 3. Build the envelope. Pure-fn — heavy lifting in srv/lib/audit-pack.ts.
+    const envelope = buildAuditPack(quote, sourceRows ?? [], {
+      serviceUrl:  process.env.CHAINFEED_PUBLIC_URL ?? 'unknown',
+      generatedAt: new Date().toISOString(),
+    });
+
+    // Return as a JSON string. Pretty-printed for human inspection — the
+    // pack is meant to be human-eyeballable. sha256 checksums of file
+    // BODIES are stable regardless of envelope-level whitespace; verifier
+    // hashes the body strings, not the surrounding JSON.
+    return JSON.stringify(envelope, null, 2);
+  });
+
+  this.on('getOhlcv', async (req) => {
+    const data = req.data as { pair?: string; interval?: string; lookbackHours?: number | string };
+    const pair = data?.pair;
+    const interval = data?.interval;
+    const lookbackHoursRaw = Number(data?.lookbackHours);
+
+    if (!pair) return req.error(400, 'pair is required');
+    if (!interval || !isValidInterval(interval)) {
+      return req.error(400, "interval must be one of '1m', '5m', '15m', '1h', '4h', '1d'");
+    }
+    if (!Number.isFinite(lookbackHoursRaw) || lookbackHoursRaw <= 0) {
+      return req.error(400, 'lookbackHours must be a positive number');
+    }
+
+    const intervalMs = intervalToMs(interval as OhlcvInterval);
+    const maxLookbackMs = maxLookbackMsForInterval(interval as OhlcvInterval);
+    const requestedMs = lookbackHoursRaw * 60 * 60 * 1000;
+    // Clamp lookback to the per-interval cap (protects DB; documented in CDS).
+    const lookbackMs = Math.min(requestedMs, maxLookbackMs);
+    const windowEnd   = Date.now();
+    const windowStart = windowEnd - lookbackMs;
+
+    const rows = await cds.run(
+      SELECT.from(AGGREGATED_PRICES)
+        .columns('createdAt', 'price')
+        .where({ pair, createdAt: { '>=': new Date(windowStart).toISOString() } }),
+    ) as Array<{ createdAt: string; price: number | string }>;
+
+    const samples = rows.map(r => ({
+      ts:    new Date(r.createdAt).getTime(),
+      price: Number(r.price),
+    }));
+
+    const candles = bucketSamples(samples, windowStart, windowEnd, intervalMs);
+
+    return {
+      pair,
+      interval,
+      windowStart:   new Date(windowStart).toISOString(),
+      windowEnd:     new Date(windowEnd).toISOString(),
+      candles:       candles.map(c => ({
+        ts:          new Date(c.ts).toISOString(),
+        open:        c.open,
+        high:        c.high,
+        low:         c.low,
+        close:       c.close,
+        sampleCount: c.sampleCount,
+      })),
+      lookbackHours: lookbackMs / (60 * 60 * 1000),  // echo back post-clamp
+    };
+  });
+
   this.on('getTWAP', async (req) => {
     const data = req.data as { pair?: string; windowMinutes?: number | string };
     const pair = data?.pair;
@@ -158,6 +435,161 @@ export = cds.service.impl(async function () {
     };
   });
 
+  this.on('getStableHealth', async (req) => {
+    const symbol = (req.data as { symbol?: string })?.symbol;
+    if (!symbol) return req.error(400, 'symbol is required');
+
+    const meta = metadataForSymbol(symbol);
+    if (!meta) return req.error(400, `symbol '${symbol}' is not a registered stable (see STABLE_METADATA)`);
+
+    // Sprint 2 supports only USD-pegged stables. EUR/XAU pivot in when their
+    // reference fanouts are available (see roadmap).
+    if (meta.peg !== 'USD') {
+      return req.error(501, `peg ${meta.peg} not yet supported by getStableHealth — USD only in Sprint 2`);
+    }
+
+    // Pure orchestration lives in srv/lib/stable-health.ts so it can be
+    // exercised in tests without booting CDS, and reused by future
+    // non-HTTP callers (Sprint 3 webhook trigger, CLI, etc).
+    return computeStableHealth(meta, {
+      fanout,
+      attestationFanout,
+      fetchSupply: fetchStableSupply,
+      // Liquidity probe runs in parallel with the other sub-fetches. It
+      // calls the price-registry fanout once and simulates a merged-pool
+      // constant-product swap at each notional — much lighter than the
+      // pre-2026-05-03 DexHunter-routed implementation. Promise.allSettled
+      // in the orchestrator still degrades the liquidity block to nulls
+      // gracefully if every adapter fails.
+      fetchLiquidityDepth: (tokenId) => executableDepthForToken(tokenId),
+      log: (level, msg) => log[level]?.(`getStableHealth(${symbol}): ${msg}`),
+    });
+  });
+
+  this.on('getStableConvergence', async () => {
+    // Snapshot ADA-X for every USD-pegged stable in the registry. Run all
+    // fanouts in parallel — each adapter's withCache layer ensures we don't
+    // hammer upstream venues even if every page in the dashboard refreshes
+    // simultaneously.
+    const usdStables = Object.values(STABLE_METADATA).filter(m => m.peg === 'USD');
+
+    const snapshots = await Promise.all(
+      usdStables.map(async (meta) => {
+        try {
+          const { quotes } = await fanout(meta.pegPair);
+          if (quotes.length === 0) return null;
+          const agg = aggregate(quotes);
+          return { symbol: meta.symbol, adaPrice: agg.price };
+        } catch (err) {
+          log.warn?.(`getStableConvergence: ${meta.pegPair} fanout failed: ${(err as Error)?.message ?? err}`);
+          return null;
+        }
+      }),
+    );
+
+    const adaPrices: Record<string, number> = {};
+    const adaPricesArr: Array<{ symbol: string; adaPrice: number }> = [];
+    for (const s of snapshots) {
+      if (!s) continue;
+      adaPrices[s.symbol] = s.adaPrice;
+      adaPricesArr.push({ symbol: s.symbol, adaPrice: s.adaPrice });
+    }
+
+    const matrix = computeConvergenceMatrix({ adaPrices });
+
+    // Flatten the NxN matrix into a list of directed cross-rates for CDS.
+    const rates: Array<{
+      fromSymbol: string;
+      toSymbol: string;
+      impliedRate: number;
+      deviationPct: number;
+    }> = [];
+    for (const A of matrix.symbols) {
+      const row = matrix.matrix[A];
+      if (!row) continue;
+      for (const B of matrix.symbols) {
+        if (A === B) continue;
+        const entry = row[B];
+        if (!entry) continue;
+        rates.push({
+          fromSymbol:   A,
+          toSymbol:     B,
+          impliedRate:  entry.impliedRate,
+          deviationPct: entry.deviationPct,
+        });
+      }
+    }
+
+    return {
+      symbols:          matrix.symbols,
+      rates,
+      convergenceScore: matrix.convergenceScore,
+      maxDeviationPct:  matrix.maxDeviationPct,
+      outliers:         matrix.outliers,
+      adaPrices:        adaPricesArr,
+      computedAt:       new Date().toISOString(),
+    };
+  });
+
+  this.on('buildPaymentTx', async (req) => {
+    const data = req.data as { buyerAddrBech32?: string; gatedAction?: string };
+    const buyer = data?.buyerAddrBech32?.trim();
+    const action = data?.gatedAction?.trim();
+    if (!buyer)  return req.error(400, 'buyerAddrBech32 is required');
+    if (!action) return req.error(400, 'gatedAction is required');
+
+    // Lazy-require the pricing module so the browser-buyer helper has
+    // zero overhead when no consumer is calling it.
+    const { priceUnitsForAction, resourcePathForAction } =
+      require('./x402/pricing') as typeof import('./x402/pricing');
+
+    let priceUnits: string;
+    try {
+      priceUnits = priceUnitsForAction(action);
+    } catch (err) {
+      return req.error(400, (err as Error).message);
+    }
+
+    // Build the same requirements body the middleware will emit on a
+    // 402 — the buyer's signed tx must satisfy this exact shape.
+    let requirementsBody;
+    try {
+      requirementsBody = buildPaymentRequirements({
+        priceUnits,
+        resource:    resourcePathForAction(action),
+        description: `Browser-buyer payment for ${action}`,
+      });
+    } catch (err) {
+      return req.error(503, `x402 misconfigured: ${(err as Error).message}`);
+    }
+    const requirements = requirementsBody.accepts[0];
+
+    let unsigned;
+    try {
+      unsigned = await buildUnsignedPaymentTx(buyer, requirements);
+    } catch (err) {
+      return req.error(400, (err as Error).message);
+    }
+
+    return {
+      unsignedTxCborHex: unsigned.unsignedTxCborHex,
+      txHashHex:         unsigned.txHashHex,
+      requiredSignerHex: unsigned.requiredSignerHex,
+      requirements: {
+        scheme:            requirements.scheme,
+        network:           requirements.network,
+        maxAmountRequired: requirements.maxAmountRequired,
+        asset:             requirements.asset,
+        assetNameHex:      requirements.extra.assetNameHex,
+        decimals:          requirements.extra.decimals,
+        payTo:             requirements.payTo,
+        resource:          requirements.resource,
+        description:       requirements.description,
+      },
+      inputs: unsigned.inputs,
+    };
+  });
+
   this.on('getBestPrice', async (req) => {
     const pair = (req.data as { pair?: string })?.pair;
     if (!pair) return req.error(400, 'pair is required');
@@ -175,18 +607,41 @@ export = cds.service.impl(async function () {
     }
 
     const agg = aggregate(quotes);
-    await persistResult(pair, agg, quotes);
+
+    // Peg-deviation: only meaningful for ADA-X pairs where X is a registered
+    // USD-pegged stable. We do an internal `fanout('ADA-USD')` to get the
+    // reference scale; both fanouts go through the cache layer so the cost
+    // is dominated by the user's pair fetch, not duplicated chain reads.
+    let pegDevBps: number | null = null;
+    const meta = metadataForPair(pair);
+    if (meta && meta.peg === 'USD') {
+      try {
+        const usdResult = await fanout('ADA-USD');
+        if (usdResult.quotes.length > 0) {
+          const usdAgg = aggregate(usdResult.quotes);
+          pegDevBps = pegDeviationBps(agg.price, usdAgg.price);
+        } else {
+          log.warn(`pegDeviationBps for ${pair}: ADA-USD fanout returned no quotes`);
+        }
+      } catch (err) {
+        // Don't fail the user's request if the peg-reference fetch breaks.
+        log.warn(`pegDeviationBps for ${pair}: ${(err as Error)?.message ?? err}`);
+      }
+    }
+
+    await persistResult(pair, agg, quotes, pegDevBps);
 
     return {
       pair,
-      price:        agg.price,
-      confidence:   agg.confidence,
-      sourcesUsed:  agg.sourcesUsed,
-      deviationPct: agg.deviationPct,
-      validUntil:   new Date(
+      price:           agg.price,
+      confidence:      agg.confidence,
+      sourcesUsed:     agg.sourcesUsed,
+      deviationPct:    agg.deviationPct,
+      pegDeviationBps: pegDevBps,
+      validUntil:      new Date(
         quotes.reduce((m, q) => Math.max(m, q.validUntil ?? q.timestamp ?? Date.now()), 0) || Date.now(),
       ).toISOString(),
-      auditTxHashes: quotes.map(q => q.txHash).filter(Boolean),
+      auditTxHashes:   quotes.map(q => q.txHash).filter(Boolean),
     };
   });
 

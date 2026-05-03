@@ -29,7 +29,7 @@
 
 import * as CSL from '@emurgo/cardano-serialization-lib-nodejs';
 import bridge from '../external/odatano-bridge';
-import { assertIsAdapter, type PriceAdapter, type PriceQuote } from './types';
+import { assertIsAdapter, type PriceAdapter, type Quote } from './types';
 
 const SOURCE_NAME = 'charli3';
 
@@ -41,6 +41,15 @@ interface FeedCfg {
   variant: Variant;
   /** true if on-chain feed direction is the inverse of our exposed pair */
   invert?: boolean;
+  /**
+   * Quote kind. Default 'price'. Set to 'attestation' for non-price feeds
+   * such as USDM-RESERVES (Mehen bank-balance), where the datum's "price"
+   * slot carries a USD reserve count rather than an exchange rate. The
+   * datum CBOR shape is identical — only the consumer interpretation differs.
+   */
+  kind?: 'price' | 'attestation';
+  /** Unit string for attestation feeds (e.g. 'usd'). Ignored for price feeds. */
+  unit?: string;
 }
 
 // Discriminator NFT asset names (UTF-8 → hex). The bridge filters by
@@ -62,6 +71,13 @@ const FEED_CONFIG = {
     'ADA-USDM': { address: 'addr1w98dq70hqh8we52jgnck535n277ajkz7pg9cpk275lkyt9gjjc97g', policyId: '36f3dc3a2a904b2678f4ebbe82dadbef1ad4144b3921d793b12a7e2f', variant: 'legacy', invert: true },
     'BTC-ADA': { address: 'addr1wyujem6fwxju9arc45lm98z0uwgwm0t8aerjp5mgahpgx7snfcpuu', policyId: '2e3ed96d283a549580e29dd6ec23e5f4a8020a8c1d7f2b95c4b2b4dd', variant: 'legacy' },
     'NIGHT-ADA': { address: 'addr1w8z46wa8ajgqj5zy90nrjp2hd4ssjtuuunpcuyfpplex4nclv9peu', policyId: '98fb91805ab677e06b71f26e5f1c700999c1addb75dbb7bb5d769029', variant: 'legacy' },
+    // USDM-RESERVES — Mehen Proof-of-Reserve attestation feed. The datum
+    // CBOR shape is the standard Charli3 PriceData (Constr 0 → Constr 2 →
+    // PlutusMap{0,1,2,3}); the `price` slot carries Mehen's bank-balance
+    // attestation in USD with `precision` decimals. Adapter returns this as
+    // `kind: 'attestation'` so it never enters price aggregation.
+    // Source: docs/research/charli3-feeds.md §3, oracle-datum-lib spec.cddl.
+    'USDM-RESERVES': { address: 'addr1w88fmwyufz9vdqkukzhaerjxcfm488wsnyrft9cpjtd4utsnw5ym7', policyId: 'e7d54c2f5c81206e307e528855bb51e5ffe9295e3db348c4be74deec', variant: 'odv', kind: 'attestation', unit: 'usd' },
     // CHARLI3-ADA + ADA-CHARLI3 deliberately excluded: Charli3 oracle pricing
     // its own native token is a conflict of interest for downstream consumers.
     // Both verified live on 2026-04-30, just not exposed via this adapter.
@@ -206,7 +222,7 @@ interface UtxoLite {
   outputIndex: number;
 }
 
-async function getPrice(pair: string, opts: GetPriceOpts = {}): Promise<PriceQuote> {
+async function getPrice(pair: string, opts: GetPriceOpts = {}): Promise<Quote> {
   const network = opts.network ?? resolveNetwork();
   if (!(FEED_CONFIG as FeedConfigLoose)[network]) {
     throw new Error(`charli3: unsupported network '${network}' (mainnet, preprod)`);
@@ -258,16 +274,15 @@ async function getPrice(pair: string, opts: GetPriceOpts = {}): Promise<PriceQuo
 
   let priceNum = rawToNumber(winner.price.price, winner.price.precision);
   if (feedCfg.invert) {
-    if (priceNum === 0) throw new Error('charli3: cannot invert zero price');
+    if (priceNum === 0) throw new Error('charli3: cannot invert zero value');
     priceNum = 1 / priceNum;
   }
 
   const isStale = Date.now() > winner.price.expiry;
 
-  return {
+  const baseFields = {
     sourceName: SOURCE_NAME,
     pair,
-    price: priceNum,
     timestamp: winner.price.timestamp,
     validUntil: winner.price.expiry,
     txHash: winner.utxo.txHash,
@@ -281,6 +296,21 @@ async function getPrice(pair: string, opts: GetPriceOpts = {}): Promise<PriceQuo
       expiry: winner.price.expiry,
       utxo: `${winner.utxo.txHash}#${winner.utxo.outputIndex}`,
     },
+  };
+
+  if (feedCfg.kind === 'attestation') {
+    return {
+      kind: 'attestation',
+      ...baseFields,
+      value: priceNum,
+      unit: feedCfg.unit ?? 'usd',
+    };
+  }
+
+  return {
+    kind: 'price',
+    ...baseFields,
+    price: priceNum,
   };
 }
 

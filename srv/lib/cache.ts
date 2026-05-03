@@ -16,12 +16,43 @@
  * spawning their own request. This is what protects upstream rate limits.
  */
 
-import { assertIsAdapter, type PriceAdapter, type PriceQuote } from '../adapters/types';
+import { assertIsAdapter, type PriceAdapter, type Quote } from '../adapters/types';
 
 interface CacheEntry {
-  quote: PriceQuote | undefined;
+  quote: Quote | undefined;
   fetchedAt: number;
-  refreshPromise?: Promise<PriceQuote>;
+  refreshPromise?: Promise<Quote>;
+  /** Last error observed when refreshing this pair, if any. Cleared on success. */
+  lastError?: { message: string; at: number };
+}
+
+/** Snapshot of cache state for one wrapped adapter — used by getServiceStatus. */
+export interface CacheStatus {
+  sourceName: string;
+  ttlMs: number;
+  /** Number of distinct pairs cached (excluding never-fetched placeholders). */
+  cachedPairCount: number;
+  /** Per-pair freshness summary, sorted by oldest fetched first. */
+  pairs: Array<{
+    pair: string;
+    fetchedAtIso: string | null;
+    ageSeconds: number | null;
+    hasInflightRefresh: boolean;
+    lastError: { message: string; at: string } | null;
+  }>;
+}
+
+/** Adapter wrapper that also exposes cache-state introspection. */
+export interface CachedAdapter extends PriceAdapter {
+  /** Snapshot the current in-memory cache state. Pure read, no I/O. */
+  status: () => CacheStatus;
+  /**
+   * Drop cached entries so the next `getPrice` triggers a fresh fetch.
+   * Pass a pair to invalidate just that one; pass nothing to clear all.
+   * Used by event-driven cache invalidation (e.g. ODATANO-WATCH event
+   * arrives → on-chain state changed → drop the cached snapshot).
+   */
+  invalidate: (pair?: string) => void;
 }
 
 export interface CacheOptions {
@@ -32,7 +63,7 @@ export interface CacheOptions {
 }
 
 /** Wrap a PriceAdapter with a TTL cache. */
-export function withCache(adapter: PriceAdapter, opts: CacheOptions): PriceAdapter {
+export function withCache(adapter: PriceAdapter, opts: CacheOptions): CachedAdapter {
   assertIsAdapter(adapter, 'withCache: adapter');
   const ttlMs = Number(opts?.ttlMs);
   if (!(ttlMs > 0) || !Number.isFinite(ttlMs)) {
@@ -42,7 +73,7 @@ export function withCache(adapter: PriceAdapter, opts: CacheOptions): PriceAdapt
 
   const store = new Map<string, CacheEntry>();
 
-  function startRefresh(pair: string, entry: CacheEntry | null): Promise<PriceQuote> {
+  function startRefresh(pair: string, entry: CacheEntry | null): Promise<Quote> {
     const promise = Promise.resolve()
       .then(() => adapter.getPrice(pair))
       .then(quote => {
@@ -52,9 +83,10 @@ export function withCache(adapter: PriceAdapter, opts: CacheOptions): PriceAdapt
       .catch(err => {
         // Drop the in-flight reference so the next caller can retry.
         const cur = store.get(pair);
+        const errInfo = { message: String(err?.message ?? err), at: Date.now() };
         if (cur && cur.refreshPromise === promise) {
           // Keep the stale quote in store; just clear the in-flight Promise.
-          store.set(pair, { quote: cur.quote, fetchedAt: cur.fetchedAt });
+          store.set(pair, { quote: cur.quote, fetchedAt: cur.fetchedAt, lastError: errInfo });
         }
         log('warn', `cache refresh for ${adapter.sourceName}:${pair} failed: ${err?.message ?? err}`);
         throw err;
@@ -68,7 +100,7 @@ export function withCache(adapter: PriceAdapter, opts: CacheOptions): PriceAdapt
   return {
     sourceName: adapter.sourceName,
     supportsPair: (pair: string): boolean => adapter.supportsPair(pair),
-    async getPrice(pair: string): Promise<PriceQuote> {
+    async getPrice(pair: string): Promise<Quote> {
       const now = Date.now();
       const entry = store.get(pair);
 
@@ -97,6 +129,41 @@ export function withCache(adapter: PriceAdapter, opts: CacheOptions): PriceAdapt
       const placeholder: CacheEntry = { quote: undefined, fetchedAt: 0 };
       store.set(pair, placeholder);
       return startRefresh(pair, placeholder);
+    },
+    invalidate(pair?: string): void {
+      if (pair) {
+        const had = store.delete(pair);
+        if (had) log('info', `cache invalidated for ${adapter.sourceName}:${pair}`);
+        return;
+      }
+      const n = store.size;
+      store.clear();
+      if (n > 0) log('info', `cache fully invalidated for ${adapter.sourceName} (${n} pairs)`);
+    },
+    status(): CacheStatus {
+      const now = Date.now();
+      const pairs = Array.from(store.entries()).map(([pair, e]) => {
+        const fetched = e.quote !== undefined && e.fetchedAt > 0;
+        return {
+          pair,
+          fetchedAtIso:       fetched ? new Date(e.fetchedAt).toISOString() : null,
+          ageSeconds:         fetched ? Math.round((now - e.fetchedAt) / 1000) : null,
+          hasInflightRefresh: !!e.refreshPromise,
+          lastError:          e.lastError ? { message: e.lastError.message, at: new Date(e.lastError.at).toISOString() } : null,
+        };
+      }).sort((a, b) => {
+        // Oldest fetched first — most-likely-stale at the top.
+        if (a.fetchedAtIso === null && b.fetchedAtIso === null) return 0;
+        if (a.fetchedAtIso === null) return -1;
+        if (b.fetchedAtIso === null) return 1;
+        return Date.parse(a.fetchedAtIso) - Date.parse(b.fetchedAtIso);
+      });
+      return {
+        sourceName: adapter.sourceName,
+        ttlMs,
+        cachedPairCount: pairs.filter(p => p.fetchedAtIso !== null).length,
+        pairs,
+      };
     },
   };
 }

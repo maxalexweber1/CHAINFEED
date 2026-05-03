@@ -112,6 +112,33 @@ export function confidence(values: number[]): number {
   return 1 - Math.min(Math.max(cv, 0), 1);
 }
 
+/**
+ * Peg-deviation in basis points. Positive = stable trades above peg,
+ * negative = below. Independent of the actual ADA-USD price scale.
+ *
+ *   stableUsdPrice = adaUsdPrice / adaStablePrice
+ *   bps            = (stableUsdPrice - 1) × 10000
+ *
+ * Example: 1 USDM = $1.00 exactly when ADA-USD = ADA-USDM (both around
+ * 0.247). If ADA-USDM drops to 0.252 (1 ADA buys more USDM, USDM is
+ * cheaper), stableUsdPrice = 0.247/0.252 = 0.980 → -200 bps (USDM below
+ * peg). Conversely ADA-USDM rising means USDM is dearer → positive bps.
+ *
+ * Throws on non-finite or non-positive inputs — peg-deviation is undefined
+ * for missing or zero prices, and a noisy `NaN` would silently corrupt the
+ * downstream HTTP response.
+ */
+export function pegDeviationBps(adaStablePrice: number, adaUsdPrice: number): number {
+  if (!Number.isFinite(adaStablePrice) || adaStablePrice <= 0) {
+    throw new Error(`pegDeviationBps: adaStablePrice must be positive finite (got ${adaStablePrice})`);
+  }
+  if (!Number.isFinite(adaUsdPrice) || adaUsdPrice <= 0) {
+    throw new Error(`pegDeviationBps: adaUsdPrice must be positive finite (got ${adaUsdPrice})`);
+  }
+  const stableUsdPrice = adaUsdPrice / adaStablePrice;
+  return (stableUsdPrice - 1) * 10_000;
+}
+
 /** Max-min spread as percent of median. e.g. [100, 102, 105] → 5%. */
 export function deviationPct(values: number[]): number {
   if (!values || values.length === 0) throw new Error('deviationPct: empty input');

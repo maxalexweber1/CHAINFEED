@@ -6,7 +6,7 @@
 import assert from 'node:assert/strict';
 import {
   median, weightedMedian, stddev, confidence, deviationPct, aggregate, twap,
-  SINGLE_SOURCE_CONFIDENCE_CAP,
+  pegDeviationBps, SINGLE_SOURCE_CONFIDENCE_CAP,
 } from '../srv/aggregation';
 
 let n = 0, fails = 0;
@@ -140,6 +140,51 @@ t('aggregate: outlier degrades confidence + raises deviation', () => {
   assert.ok(r.price < 1, `median should ignore the 100 outlier, got ${r.price}`);
   assert.ok(r.confidence < 0.5, `outlier should drop confidence, got ${r.confidence}`);
   assert.ok(r.deviationPct > 1000, `outlier should produce huge deviation, got ${r.deviationPct}`);
+});
+
+// ── pegDeviationBps ──────────────────────────────────────────────────
+t('pegDeviationBps: perfect peg → 0 bps', () => {
+  // 1 ADA buys exactly 0.247 USDM. ADA-USD = 0.247. Implied USDM/USD = 1.0.
+  assert.equal(pegDeviationBps(0.247, 0.247), 0);
+});
+
+t('pegDeviationBps: stable below peg → negative bps', () => {
+  // ADA-USDM = 0.252 (1 ADA buys MORE USDM, USDM is cheap), ADA-USD = 0.247.
+  // implied USDM/USD = 0.247/0.252 = 0.9802 → -198.4 bps
+  const bps = pegDeviationBps(0.252, 0.247);
+  assert.ok(bps < 0, `expected negative bps for below-peg, got ${bps}`);
+  assert.ok(close(bps, -198.4127, 0.01), `got ${bps}`);
+});
+
+t('pegDeviationBps: stable above peg → positive bps', () => {
+  // ADA-USDM = 0.242 (1 ADA buys FEWER USDM, USDM is dear), ADA-USD = 0.247.
+  // implied USDM/USD = 0.247/0.242 = 1.0207 → +206.6 bps
+  const bps = pegDeviationBps(0.242, 0.247);
+  assert.ok(bps > 0, `expected positive bps for above-peg, got ${bps}`);
+  assert.ok(close(bps, 206.6116, 0.01), `got ${bps}`);
+});
+
+t('pegDeviationBps: depeg event (10% below) ≈ -1000 bps', () => {
+  // ADA-USDM = 0.2744 means USDM = 0.247/0.2744 = 0.9001, deviation -999 bps
+  const bps = pegDeviationBps(0.2744, 0.247);
+  assert.ok(close(bps, -998.5, 1.0), `got ${bps}`);
+});
+
+t('pegDeviationBps: scale-invariant (works at any ADA-USD level)', () => {
+  // Same proportion: 1% above peg should always give ~+100 bps regardless of
+  // the absolute ADA-USD level. Two scales that should produce same bps.
+  const bpsLow  = pegDeviationBps(0.10 / 1.01, 0.10);   // ADA = $0.10
+  const bpsHigh = pegDeviationBps(2.00 / 1.01, 2.00);   // ADA = $2.00
+  assert.ok(close(bpsLow, bpsHigh, 0.01), `bps depends on scale: ${bpsLow} vs ${bpsHigh}`);
+  assert.ok(close(bpsLow, 100, 0.5), `expected ~100 bps, got ${bpsLow}`);
+});
+
+t('pegDeviationBps: rejects non-positive prices', () => {
+  assert.throws(() => pegDeviationBps(0,    0.247), /adaStablePrice/);
+  assert.throws(() => pegDeviationBps(-1,   0.247), /adaStablePrice/);
+  assert.throws(() => pegDeviationBps(0.247, 0),    /adaUsdPrice/);
+  assert.throws(() => pegDeviationBps(0.247, NaN),  /adaUsdPrice/);
+  assert.throws(() => pegDeviationBps(NaN,   0.247), /adaStablePrice/);
 });
 
 // ── twap ──────────────────────────────────────────────────────────────

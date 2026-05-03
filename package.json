@@ -8,7 +8,8 @@
     "node": ">=20"
   },
   "dependencies": {
-    "@odatano/core": "^1.7.4",
+    "@odatano/core": "^1.7.6",
+    "@odatano/watch": "^0.1.6",
     "@sap/cds": "^9",
     "express": "^4"
   },
@@ -25,13 +26,18 @@
     "typescript-eslint": "^8.59.1"
   },
   "scripts": {
-    "start": "cross-env CDS_TYPESCRIPT=1 NODE_OPTIONS=\"--import tsx\" cds-serve",
-    "dev": "cross-env CDS_TYPESCRIPT=1 NODE_OPTIONS=\"--import tsx\" cds watch",
+    "start": "cross-env CDS_TYPESCRIPT=1 NETWORK=mainnet NODE_OPTIONS=\"--import tsx\" cds-serve",
+    "dev": "cross-env CDS_TYPESCRIPT=1 NETWORK=mainnet NODE_OPTIONS=\"--import tsx\" cds watch",
     "build": "cds build --production && tsc",
     "typecheck": "tsc --noEmit",
     "check-no-js": "node -e \"const r=require('child_process').execSync('git ls-files srv scripts',{encoding:'utf8'}).split('\\n').filter(f=>/^(srv|scripts)\\/.+\\.js$/.test(f));if(r.length){console.error('TS-only policy: forbidden .js files:\\n'+r.join('\\n'));process.exit(1)}\"",
     "test": "echo \"no tests yet\" && exit 0",
-    "lint": "eslint ."
+    "smoke": "tsx scripts/smoke-all.ts",
+    "lint": "eslint .",
+    "app:install": "npm --prefix app install",
+    "app:dev": "npm --prefix app run dev",
+    "app:build": "npm --prefix app run build",
+    "app:typecheck": "npm --prefix app run typecheck"
   },
   "cds": {
     "requires": {
@@ -42,15 +48,39 @@
         }
       },
       "odatano-core": {
-        "network": "preprod",
+        "network": "mainnet",
         "backends": [
-          "blockfrost"
+          "blockfrost",
+          "koios"
         ],
+        "blockfrostApiKey": "mainnet_yourkeyhere",
         "txBuilders": [
           "buildooor"
         ],
         "primaryTimeoutMs": 30000,
         "indexTtlMs": 3600000
+      },
+      "watch": {
+        "network": "mainnet",
+        "blockfrostApiKey": "mainnet_yourkeyhere",
+        "koiosApiKey": "",
+        "autoStart": true,
+        "addressPolling": {
+          "enabled": true,
+          "interval": 30
+        },
+        "transactionPolling": {
+          "enabled": false,
+          "interval": 60
+        },
+        "credentialPolling": {
+          "enabled": true,
+          "interval": 60
+        },
+        "policyPolling": {
+          "enabled": false,
+          "interval": 60
+        }
       }
     }
   }
