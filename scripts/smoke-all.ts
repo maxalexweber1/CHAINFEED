@@ -44,6 +44,11 @@ const SMOKES: SmokeJob[] = [
   { name: 'odatano',              file: 'smoke-odatano.ts',              category: 'chain', parallelSafe: false, timeoutMs: 30_000 },
   { name: 'charli3',              file: 'smoke-charli3.ts',              category: 'chain', parallelSafe: false, timeoutMs: 90_000 },
   { name: 'djed-reserves',        file: 'smoke-djed-reserves.ts',        category: 'chain', parallelSafe: false, timeoutMs: 60_000 },
+  // FluidTokens v3 reads ~1100 UTxOs (pools + loans) via two
+  // bridge.getUtxosAtCredential calls. Heavier than Indigo; allow 90s.
+  // Mainnet-only (FLUIDTOKENS_NETWORK=mainnet enforced internally), so it
+  // ignores the global NETWORK env and always hits mainnet Koios.
+  { name: 'fluidtokens',          file: 'smoke-fluidtokens.ts',          category: 'chain', parallelSafe: false, timeoutMs: 120_000 },
 ];
 
 interface SmokeResult {

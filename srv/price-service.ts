@@ -29,6 +29,9 @@ import { buildPaymentRequirements, resolveConfig as resolveX402Config } from './
 import { fetchStableSupply } from './lib/stable-supply';
 import { executableDepthForToken } from './lib/liquidity-depth';
 import { computeStableHealth } from './lib/stable-health';
+import { computeFluidHealth } from './lib/fluidtokens-health';
+import fluidtokens from './adapters/fluidtokens';
+import { resolveFluidNetwork } from './lib/fluidtokens-config';
 import {
   bucketSamples, intervalToMs, maxLookbackMsForInterval, isValidInterval,
   type Interval as OhlcvInterval,
@@ -642,6 +645,156 @@ export = cds.service.impl(async function () {
         quotes.reduce((m, q) => Math.max(m, q.validUntil ?? q.timestamp ?? Date.now()), 0) || Date.now(),
       ).toISOString(),
       auditTxHashes:   quotes.map(q => q.txHash).filter(Boolean),
+    };
+  });
+
+  // ── FluidTokens v3 lending ──────────────────────────────────────────
+  // Thin handlers — delegate to the adapter's side-door fetchers
+  // (`_fetchAllPools` / `_fetchAllLoans`) and shape into the CDS view types.
+  // The composite endpoint reuses both via `computeFluidHealth`.
+
+  this.on('getFluidtokensPools', async (req) => {
+    const filterAsset = (req.data as { asset?: string | null })?.asset;
+    let network: string;
+    try { network = resolveFluidNetwork(); }
+    catch (err) { return req.error(503, (err as Error).message); }
+
+    const r = await fluidtokens._fetchAllPools();
+    const pools = r.pools
+      .filter(p => {
+        if (!filterAsset) return true;
+        const key = p.datum.commonData.principalAsset.policyId === ''
+          ? 'ADA' : (p.datum.commonData.principalAsset.policyId + p.datum.commonData.principalAsset.assetNameHex).toLowerCase();
+        return key === filterAsset.toLowerCase();
+      })
+      .map(p => {
+        const lm = p.datum.commonData.liquidationMode;
+        const rm = p.datum.commonData.repaymentMode;
+        return {
+          poolIdHex:             p.poolIdHex,
+          txHash:                p.txHash,
+          outputIndex:           p.outputIndex,
+          lovelace:              p.lovelace.toString(),
+          availablePrincipalRaw: p.availablePrincipalRaw.toString(),
+          principalAsset:        p.datum.commonData.principalAsset,
+          interestRate:          p.datum.commonData.interestRate,
+          repaymentModeKind:     rm.kind,
+          apyIncreaseLinearCoefficient: rm.kind === 'perpetual' ? rm.apyIncreaseLinearCoefficient : null,
+          liquidationModeKind:   lm.kind,
+          liquidationLtv:        lm.kind === 'liquidation' ? lm.ltv : null,
+          liquidationPenaltyPerMille: lm.kind === 'liquidation' ? lm.penaltyPerMille : null,
+          installmentPeriod:     p.datum.commonData.installmentPeriod,
+          totalInstallments:     p.datum.commonData.totalInstallments,
+          isPermissioned:        p.datum.isPermissioned,
+          collateralOptions:     p.datum.collateralOptions.map(c => c.asset),
+        };
+      });
+    return {
+      network,
+      poolCount:  pools.length,
+      pools,
+      computedAt: new Date().toISOString(),
+    };
+  });
+
+  this.on('getFluidtokensLoans', async (req) => {
+    const filterAsset = (req.data as { asset?: string | null })?.asset;
+    let network: string;
+    try { network = resolveFluidNetwork(); }
+    catch (err) { return req.error(503, (err as Error).message); }
+
+    const r = await fluidtokens._fetchAllLoans();
+    const loans = r.loans
+      .filter(l => {
+        if (!filterAsset) return true;
+        const key = l.datum.principalAsset.policyId === ''
+          ? 'ADA' : (l.datum.principalAsset.policyId + l.datum.principalAsset.assetNameHex).toLowerCase();
+        return key === filterAsset.toLowerCase();
+      })
+      .map(l => ({
+        loanIdHex:             l.loanIdHex,
+        txHash:                l.txHash,
+        outputIndex:           l.outputIndex,
+        poolIdHex:             l.poolIdHex,
+        collateralLovelace:    l.collateralLovelace.toString(),
+        principal:             l.datum.principal.toString(),
+        principalAsset:        l.datum.principalAsset,
+        interestRate:          l.datum.interestRate,
+        lendDateMs:            l.datum.lendDateMs,
+        repaidInstallments:    l.datum.repaidInstallments,
+        installmentPeriod:     l.datum.installmentPeriod,
+        totalInstallments:     l.datum.totalInstallments,
+        repaymentModeKind:     l.datum.repaymentMode.kind,
+        liquidationModeKind:   l.datum.liquidationMode.kind,
+      }));
+    return {
+      network,
+      loanCount: loans.length,
+      loans,
+      computedAt: new Date().toISOString(),
+    };
+  });
+
+  this.on('getFluidtokensHealth', async (req) => {
+    let network: string;
+    try { network = resolveFluidNetwork(); }
+    catch (err) { return req.error(503, (err as Error).message); }
+
+    // ADA-USD reference for LTV computation. Best-effort — if the price
+    // fanout can't satisfy ADA-USD we skip LTV and flag in alerts.
+    let adaUsd: number | null = null;
+    try {
+      const { quotes } = await fanout('ADA-USD');
+      if (quotes.length > 0) {
+        const agg = aggregate(quotes);
+        if (Number.isFinite(agg.price) && agg.price > 0) adaUsd = agg.price;
+      }
+    } catch (err) {
+      log.warn?.(`getFluidtokensHealth: ADA-USD fanout failed: ${(err as Error)?.message ?? err}`);
+    }
+
+    const result = await computeFluidHealth({
+      fetchAllPools: fluidtokens._fetchAllPools,
+      fetchAllLoans: fluidtokens._fetchAllLoans,
+      lovelacePerPrincipalUnit: (asset) => {
+        // Lovelace per 1 RAW unit of principal-asset (not per whole unit).
+        // - ADA principal: raw unit IS lovelace → rate = 1.
+        // - USD-pegged stable (6-decimal): raw unit = 1e-6 stable. At ADA=$x,
+        //   1 stable ≈ (1/x) ADA = (1/x)×1e6 lovelace, so 1 raw stable ≈
+        //   (1/x) lovelace. Coarse approximation (ignores per-stable peg
+        //   deviation, ignores variable decimals — fine for system health).
+        if (!asset || (asset.policyId === '' && asset.assetNameHex === '')) {
+          return 1;
+        }
+        if (adaUsd === null) return null;
+        return 1 / adaUsd;
+      },
+      log: (level, msg) => log[level]?.(`getFluidtokensHealth: ${msg}`),
+    });
+
+    const alerts = [...result.alerts];
+    if (adaUsd === null) alerts.push('fluidtokens-ada-usd-reference-missing');
+
+    return {
+      network,
+      computedAt: new Date(result.computedAtMs).toISOString(),
+      poolsTotal: result.poolsTotal,
+      loansTotal: result.loansTotal,
+      perAsset:   result.perAsset.map(r => ({
+        assetKey:               r.key,
+        principalAsset:         r.principalAsset,
+        poolCount:              r.pools.count,
+        poolsAvailableRaw:      r.pools.availableRaw,
+        poolsLovelace:          r.pools.lovelace,
+        loanCount:              r.loans.count,
+        outstandingPrincipalRaw: r.loans.outstandingPrincipalRaw,
+        currentDebtRaw:          r.loans.currentDebtRaw,
+        collateralLovelace:      r.loans.collateralLovelace,
+        liquidatable:            r.loans.liquidatable,
+        late:                    r.loans.late,
+        permissionedPoolCount:   r.pools.permissionedCount,
+      })),
+      alerts,
     };
   });
 

@@ -30,6 +30,7 @@ import wingridersStableswap from './wingriders-stableswap';
 import djedReserves from './djed-reserves';
 import indigoCdp from './indigo-cdp';
 import circleUsdcAttestation from './circle-usdc-attestation';
+import fluidtokens from './fluidtokens';
 
 const log = cds.log('adapters');
 type LogLevel = 'debug' | 'info' | 'warn' | 'error';
@@ -69,12 +70,18 @@ const indigoCdpCached = withCache(indigoCdp, { ttlMs: 60_000, log: cacheLog });
 // PDF every minute. 1 hour TTL is fine; the cache absorbs concurrent reads
 // and the PDF is ~300 KB so each fetch is cheap when it does happen.
 const circleUsdcAttestationCached = withCache(circleUsdcAttestation, { ttlMs: 60 * 60 * 1000, log: cacheLog });
+// FluidTokens reads ~thousands of loan + pool UTxOs via Koios credential queries.
+// State changes per borrow/repay/lend tx — minutes-cadence at most. 60s TTL
+// matches the iUSD-CDP profile. Both pairs share the same upstream cost
+// because each fanout is one Koios round-trip; cache amortises across them.
+const fluidtokensCached = withCache(fluidtokens, { ttlMs: 60_000, log: cacheLog });
 
 // Oracle + attestation sources are excluded from DEX-only fanouts (arbitrage).
 // Update both `ALL_SOURCES` and the `ORACLE_SOURCE_NAMES` set when adding
 // either kind of non-DEX source.
 const ORACLE_SOURCE_NAMES: ReadonlySet<string> = new Set([
   'orcfax', 'charli3', 'djed-reserves', 'indigo-cdp', 'circle-usdc-attestation',
+  'fluidtokens',
 ]);
 
 /**
@@ -85,7 +92,7 @@ const ORACLE_SOURCE_NAMES: ReadonlySet<string> = new Set([
 export const ALL_SOURCES: PriceAdapter[] = [
   orcfaxCached, charli3Cached, minswapCached, minswapV2Cached, sundaeswapCached,
   wingridersCached, wingridersStableswapCached,
-  djedReservesCached, indigoCdpCached, circleUsdcAttestationCached,
+  djedReservesCached, indigoCdpCached, circleUsdcAttestationCached, fluidtokensCached,
 ];
 
 /**
@@ -95,7 +102,7 @@ export const ALL_SOURCES: PriceAdapter[] = [
 const ALL_CACHED_SOURCES: CachedAdapter[] = [
   orcfaxCached, charli3Cached, minswapCached, minswapV2Cached, sundaeswapCached,
   wingridersCached, wingridersStableswapCached,
-  djedReservesCached, indigoCdpCached, circleUsdcAttestationCached,
+  djedReservesCached, indigoCdpCached, circleUsdcAttestationCached, fluidtokensCached,
 ];
 
 /**

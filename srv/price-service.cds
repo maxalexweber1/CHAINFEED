@@ -347,4 +347,122 @@ service PriceService {
   }
 
   action getServiceStatus() returns ServiceStatus;
+
+  // ── FluidTokens Lending V3 ──────────────────────────────────────────
+  // Reads every active lender pool + loan UTxO from the live mainnet
+  // deploy. Backed by srv/adapters/fluidtokens.ts (one Koios round-trip
+  // per fetch, 60s cache). Health endpoint applies finance.ak math to
+  // each loan to compute current outstanding debt + LTV. See ADR
+  // 0003 for ODATANO-watch event-driven cache invalidation roadmap.
+
+  type FluidAsset {
+    policyId     : String;
+    assetNameHex : String;
+  }
+
+  type FluidPool {
+    poolIdHex             : String;
+    txHash                : String;
+    outputIndex           : Integer;
+    /** Lovelace held in the pool UTxO. */
+    lovelace              : String;
+    /** Available principal to borrow (raw units). For ADA pools this
+     *  equals lovelace; for native-token pools it's the asset quantity. */
+    availablePrincipalRaw : String;
+    principalAsset        : FluidAsset;
+    /** Annual rate in source units (basis-points-style — 400 = 4.00 %). */
+    interestRate          : Integer;
+    /** 'perpetual' | 'interest-on-remaining-principal' | 'principal-and-interest-on-installments' */
+    repaymentModeKind     : String;
+    apyIncreaseLinearCoefficient : Integer null;
+    /** 'no-liquidation-full-collateral-claim' | 'no-liquidation-dutch-auction-claim' | 'liquidation' */
+    liquidationModeKind   : String;
+    liquidationLtv        : Integer null;
+    liquidationPenaltyPerMille : Integer null;
+    installmentPeriod     : Integer;
+    totalInstallments     : Integer;
+    isPermissioned        : Boolean;
+    collateralOptions     : array of FluidAsset;
+  }
+
+  type FluidPoolsResult {
+    network    : String;
+    poolCount  : Integer;
+    pools      : array of FluidPool;
+    computedAt : Timestamp;
+  }
+
+  /**
+   * Snapshot every active FluidTokens v3 lender pool. Optional `asset`
+   * filter (lowercase hex unit, or 'ADA') narrows the result to a
+   * single principal-asset family. Empty/missing returns all.
+   */
+  action getFluidtokensPools(asset : String null) returns FluidPoolsResult;
+
+  type FluidLoan {
+    loanIdHex             : String;
+    txHash                : String;
+    outputIndex           : Integer;
+    poolIdHex             : String;
+    collateralLovelace    : String;
+    /** Outstanding principal at origination (raw units — divide by
+     *  10^decimals for whole units). */
+    principal             : String;
+    principalAsset        : FluidAsset;
+    interestRate          : Integer;
+    lendDateMs            : Integer64;
+    repaidInstallments    : Integer;
+    installmentPeriod     : Integer;
+    totalInstallments     : Integer;
+    repaymentModeKind     : String;
+    liquidationModeKind   : String;
+  }
+
+  type FluidLoansResult {
+    network    : String;
+    loanCount  : Integer;
+    loans      : array of FluidLoan;
+    computedAt : Timestamp;
+  }
+
+  /**
+   * Snapshot every active FluidTokens v3 loan. Optional `asset` filter
+   * narrows to a principal-asset family.
+   */
+  action getFluidtokensLoans(asset : String null) returns FluidLoansResult;
+
+  type FluidAssetRollup {
+    // 'assetKey' instead of 'key' — `key` is a reserved CDS keyword.
+    // Value: 'ADA' for ADA-principal, otherwise lowercase hex unit
+    // (policyId + assetNameHex concatenated).
+    assetKey       : String;
+    principalAsset : FluidAsset;
+    poolCount      : Integer;
+    poolsAvailableRaw : String;
+    poolsLovelace  : String;
+    loanCount      : Integer;
+    outstandingPrincipalRaw : String;
+    currentDebtRaw : String;
+    collateralLovelace : String;
+    liquidatable   : Integer;
+    late           : Integer;
+    permissionedPoolCount : Integer;
+  }
+
+  type FluidHealthResult {
+    network      : String;
+    computedAt   : Timestamp;
+    poolsTotal   : Integer;
+    loansTotal   : Integer;
+    perAsset     : array of FluidAssetRollup;
+    alerts       : array of String;
+  }
+
+  /**
+   * Composite health view across all principal-assets. Applies finance.ak
+   * (perpetual quadratic-drift, amortization, late-detection, LTV) to
+   * each active loan and rolls up. Alerts string-stable (e.g.
+   * 'fluidtokens-ADA-liquidatable-3') for consumer matching.
+   */
+  action getFluidtokensHealth() returns FluidHealthResult;
 }

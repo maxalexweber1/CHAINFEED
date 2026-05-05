@@ -1,4 +1,8 @@
+![alt text](docs/images/chainfeed_logo_white.png)
+
+
 # CHAINFEED
+
 
 > Cardano stable-coin oracle aggregator with x402 payment settlement,
 > on-chain reserves attestation, and offline-verifiable audit packs.
