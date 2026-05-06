@@ -1,0 +1,86 @@
+# Dolos daemon config — Cardano mainnet for CHAINFEED.
+#
+# All paths inside this file resolve relative to the container's working
+# directory (`/etc/dolos`) unless absolute. Genesis files come baked into
+# the official ghcr.io/txpipe/dolos image at /etc/genesis/<network>/.
+#
+# Bootstrap procedure (Mithril snapshot, ~few hours mainnet):
+#     docker compose -f docker-compose.dolos.yml run --rm dolos bootstrap mithril
+#
+# Then start in daemon mode:
+#     docker compose -f docker-compose.dolos.yml up -d
+#
+# Once running:
+#   - ws://localhost:1337   N/A — Ogmios is NOT exposed; Dolos speaks Ouroboros
+#                            n2c on a Unix socket (see /socket/dolos.socket).
+#                            If we want JSON-WSP Ogmios later, add a sidecar.
+#   - http://localhost:3100 Mini-Blockfrost (REST, Blockfrost-API compatible)
+#                            (3100 instead of Dolos default 3000 to avoid
+#                            the Next.js dev server port collision)
+#   - http://localhost:1442 Mini-Kupo (REST, Kupo-pattern lookups)
+#   - grpc://localhost:50051 UTxO RPC (gRPC + gRPC-Web)
+
+[upstream]
+peer_address = "backbone.mainnet.cardanofoundation.org:3001"
+
+[storage]
+# v3 = Redb backend (default since 1.0). Stable on mainnet.
+version = "v3"
+# Relative to container working dir. The /data volume mount keeps it persistent
+# across container recreations.
+path = "/data"
+
+[genesis]
+# Image-baked mainnet genesis — verified blake2b hashes match book.world.dev.cardano.org.
+byron_path   = "/etc/genesis/mainnet/byron.json"
+shelley_path = "/etc/genesis/mainnet/shelley.json"
+alonzo_path  = "/etc/genesis/mainnet/alonzo.json"
+conway_path  = "/etc/genesis/mainnet/conway.json"
+
+[sync]
+# 30-day rolling history. We only need recent state for stable health + lending
+# attestations; longer history would inflate disk for no CHAINFEED benefit.
+max_history  = 2592000
+max_rollback = 129600
+
+[submit]
+# Tx-submit pruning height — irrelevant for read-only consumers like CHAINFEED,
+# but the schema requires this section.
+prune_height = 200
+
+# ── Endpoints ────────────────────────────────────────────────────────────────
+# Bind to all interfaces inside the container; Docker port-mappings expose to
+# the host. Permissive CORS so the Next.js dev server can hit MiniBF directly.
+
+[serve.grpc]
+listen_address = "[::]:50051"
+
+[serve.ouroboros]
+# Unix socket for n2c clients (Pallas, Cardano-CLI, Ogmios sidecar). Lives in
+# the shared /socket volume so a future Ogmios container can mount it ro.
+listen_path = "/socket/dolos.socket"
+
+[serve.minibf]
+listen_address = "[::]:3000"
+permissive_cors = true
+max_scan_items = 3000
+
+[serve.minikupo]
+listen_address = "[::]:1442"
+permissive_cors = true
+
+# ── Mithril bootstrap ────────────────────────────────────────────────────────
+# Official IOG mainnet aggregator + verification keys. These let `dolos
+# bootstrap mithril` download a multi-SPO-signed snapshot instead of replaying
+# from genesis (which would take weeks). Keys verified against
+# https://mithril.network/doc/manual/getting-started/run-mithril-devnet/
+# 2026-05-06.
+
+[mithril]
+aggregator = "https://aggregator.release-mainnet.api.mithril.network/aggregator"
+genesis_key = "5b3139312c36362c3134302c3138352c3133382c31312c3233372c3230372c3235302c3134342c32372c322c3138382c33302c31322c38312c3135352c3230342c31302c3137392c37352c32332c3133382c3139362c3231372c352c31342c32302c35372c37392c33392c3137365d"
+
+[chain]
+type      = "cardano"
+magic     = 764824073
+is_testnet = false

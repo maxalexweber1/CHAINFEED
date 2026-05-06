@@ -8,8 +8,8 @@
     "node": ">=20"
   },
   "dependencies": {
-    "@odatano/core": "^1.7.6",
-    "@odatano/watch": "^0.1.6",
+    "@odatano/core": "^1.7.7",
+    "@odatano/watch": "^0.1.7",
     "@sap/cds": "^9",
     "express": "^4"
   },
@@ -50,10 +50,11 @@
       "odatano-core": {
         "network": "mainnet",
         "backends": [
-          "blockfrost",
-          "koios"
+          "koios",
+          "blockfrost"
         ],
-        "blockfrostApiKey": "mainnet_yourkeyhere",
+        "blockfrostApiKey": "mainneto3W0EZiAmZIYO83hTlI9G8G2XuJ7890s",
+        "blockfrostCustomBackend": "",
         "txBuilders": [
           "buildooor"
         ],
@@ -62,12 +63,13 @@
       },
       "watch": {
         "network": "mainnet",
-        "blockfrostApiKey": "mainnet_yourkeyhere",
+        "blockfrostApiKey": "mainneto3W0EZiAmZIYO83hTlI9G8G2XuJ7890s",
+        "blockfrostCustomBackend": "",
         "koiosApiKey": "",
-        "autoStart": true,
+        "autoStart": false,
         "addressPolling": {
           "enabled": true,
-          "interval": 30
+          "interval": 300
         },
         "transactionPolling": {
           "enabled": false,
@@ -75,7 +77,7 @@
         },
         "credentialPolling": {
           "enabled": true,
-          "interval": 60
+          "interval": 300
         },
         "policyPolling": {
           "enabled": false,

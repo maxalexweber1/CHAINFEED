@@ -753,22 +753,37 @@ export = cds.service.impl(async function () {
       log.warn?.(`getFluidtokensHealth: ADA-USD fanout failed: ${(err as Error)?.message ?? err}`);
     }
 
+    // Build a (policyId|assetNameHex) → StableMetadata index so we only call
+    // an asset a "USD-pegged stable" when it actually matches a registered
+    // entry. Previous version returned `1/adaUsd` for every non-ADA asset,
+    // which mis-priced SNEK/HOSKY/BTC/NIGHT/etc. and produced false-positive
+    // liquidations across the long-tail principals.
+    const stableByPolicyAsset = new Map<string, typeof STABLE_METADATA[keyof typeof STABLE_METADATA]>();
+    for (const m of Object.values(STABLE_METADATA)) {
+      stableByPolicyAsset.set(`${m.policyId}|${m.assetNameHex}`, m);
+    }
+
+    const assetToLovelaceRate = (asset: { policyId: string; assetNameHex: string }): number | null => {
+      // ADA — raw unit IS lovelace.
+      if (!asset || (asset.policyId === '' && asset.assetNameHex === '')) return 1;
+      const meta = stableByPolicyAsset.get(`${asset.policyId}|${asset.assetNameHex}`);
+      if (meta && meta.peg === 'USD') {
+        // 6-decimal USD-stable at peg ≈ 1 raw = 1e-6 USD = (1/adaUsd) lovelace.
+        // Decimals enforced via the registry — every current entry is 6-dec.
+        if (adaUsd === null || meta.decimals !== 6) return null;
+        return 1 / adaUsd;
+      }
+      // Long-tail (BTC, NIGHT, SNEK, HOSKY, …) — no fixed-symbol price feed
+      // wired here. Returning null causes computeFluidHealth to skip the
+      // loan and report it under `liquidationSkippedUnpriceable` instead of
+      // silently mis-pricing it.
+      return null;
+    };
+
     const result = await computeFluidHealth({
       fetchAllPools: fluidtokens._fetchAllPools,
       fetchAllLoans: fluidtokens._fetchAllLoans,
-      lovelacePerPrincipalUnit: (asset) => {
-        // Lovelace per 1 RAW unit of principal-asset (not per whole unit).
-        // - ADA principal: raw unit IS lovelace → rate = 1.
-        // - USD-pegged stable (6-decimal): raw unit = 1e-6 stable. At ADA=$x,
-        //   1 stable ≈ (1/x) ADA = (1/x)×1e6 lovelace, so 1 raw stable ≈
-        //   (1/x) lovelace. Coarse approximation (ignores per-stable peg
-        //   deviation, ignores variable decimals — fine for system health).
-        if (!asset || (asset.policyId === '' && asset.assetNameHex === '')) {
-          return 1;
-        }
-        if (adaUsd === null) return null;
-        return 1 / adaUsd;
-      },
+      assetToLovelaceRate,
       log: (level, msg) => log[level]?.(`getFluidtokensHealth: ${msg}`),
     });
 
@@ -790,9 +805,10 @@ export = cds.service.impl(async function () {
         outstandingPrincipalRaw: r.loans.outstandingPrincipalRaw,
         currentDebtRaw:          r.loans.currentDebtRaw,
         collateralLovelace:      r.loans.collateralLovelace,
-        liquidatable:            r.loans.liquidatable,
-        late:                    r.loans.late,
-        permissionedPoolCount:   r.pools.permissionedCount,
+        liquidatable:                  r.loans.liquidatable,
+        liquidationSkippedUnpriceable: r.loans.liquidationSkippedUnpriceable,
+        late:                          r.loans.late,
+        permissionedPoolCount:         r.pools.permissionedCount,
       })),
       alerts,
     };

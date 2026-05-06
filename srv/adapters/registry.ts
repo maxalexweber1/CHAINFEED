@@ -71,10 +71,10 @@ const indigoCdpCached = withCache(indigoCdp, { ttlMs: 60_000, log: cacheLog });
 // and the PDF is ~300 KB so each fetch is cheap when it does happen.
 const circleUsdcAttestationCached = withCache(circleUsdcAttestation, { ttlMs: 60 * 60 * 1000, log: cacheLog });
 // FluidTokens reads ~thousands of loan + pool UTxOs via Koios credential queries.
-// State changes per borrow/repay/lend tx — minutes-cadence at most. 60s TTL
-// matches the iUSD-CDP profile. Both pairs share the same upstream cost
-// because each fanout is one Koios round-trip; cache amortises across them.
-const fluidtokensCached = withCache(fluidtokens, { ttlMs: 60_000, log: cacheLog });
+// State changes per borrow/repay/lend tx — minutes-cadence at most. 5-minute
+// TTL keeps Blockfrost cost bounded when the dashboard re-renders (paginated
+// 1000-UTxO reads are expensive); aligned with the dashboard ISR window.
+const fluidtokensCached = withCache(fluidtokens, { ttlMs: 300_000, log: cacheLog });
 
 // Oracle + attestation sources are excluded from DEX-only fanouts (arbitrage).
 // Update both `ALL_SOURCES` and the `ORACLE_SOURCE_NAMES` set when adding

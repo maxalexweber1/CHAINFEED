@@ -300,7 +300,7 @@ async function main() {
     const result = await computeFluidHealth({
       fetchAllPools: ft._fetchAllPools,
       fetchAllLoans: ft._fetchAllLoans,
-      lovelacePerPrincipalUnit: () => 1,   // ADA: raw unit = lovelace
+      assetToLovelaceRate: () => 1,   // ADA: raw unit = lovelace
       now: () => Date.now(),
     });
     assert.equal(result.poolsTotal, 1);
@@ -337,11 +337,123 @@ async function main() {
     const result = await computeFluidHealth({
       fetchAllPools: ft._fetchAllPools,
       fetchAllLoans: ft._fetchAllLoans,
-      lovelacePerPrincipalUnit: () => 1,   // ADA: raw unit = lovelace
+      assetToLovelaceRate: () => 1,   // ADA: raw unit = lovelace
     });
     const r = result.perAsset.find((x: { key: string }) => x.key === 'ADA');
     assert.equal(r!.loans.liquidatable, 1);
     assert.ok(result.alerts.some((a: string) => a === 'fluidtokens-ADA-liquidatable-1' || a === 'fluidtokens-ADA-orphan-loans'));
+  });
+
+  await t('computeFluidHealth: native-token collateral, all priceable → debt sums correctly, not liquidatable', async () => {
+    // 200 USDM debt-equivalent + 1 ADA min-ADA UTxO + 5_000 USDM as native
+    // collateral. With assetToLovelaceRate(USDM)=2_000_000 (≈ ADA=$0.5), the
+    // collateral is 1 ADA + 5_000×2_000_000 = 10_001_000_000 lovelace
+    // (≈ 10_001 ADA equiv). Debt = 200 USDM × 2_000_000 = 400_000_000
+    // lovelace (≈ 400 ADA). LTV ≈ 4 % → not liquidatable.
+    utxoMap.set(FLUID.poolSpendHash, []);
+    utxoMap.set(FLUID.loanSpendHash, [
+      bridgeUtxoWithNft({
+        policyId: FLUID.loanPolicy,
+        nftAssetNameHex: 'cc'.repeat(28),
+        lovelace: '1000000',  // min-ADA only
+        datumHex: buildLoanDatum({
+          principal: 200_000_000n, lendDateMs: Date.now(),
+          principalAsset: USDM, interestRate: 400,
+          poolIdHex: '504f4f4c' + '02'.repeat(26),
+        }),
+        extraAssets: [
+          { unit: USDM.policyId + USDM.assetNameHex, policyId: USDM.policyId, assetNameHex: USDM.assetNameHex, quantity: '5000000000' },
+        ],
+      }),
+    ]);
+
+    const result = await computeFluidHealth({
+      fetchAllPools: ft._fetchAllPools,
+      fetchAllLoans: ft._fetchAllLoans,
+      assetToLovelaceRate: (asset: { policyId: string; assetNameHex: string }) => {
+        if (asset.policyId === '' && asset.assetNameHex === '') return 1;
+        if (asset.policyId === USDM.policyId && asset.assetNameHex === USDM.assetNameHex) return 2_000_000;
+        return null;
+      },
+    });
+    const usdmKey = (USDM.policyId + USDM.assetNameHex).toLowerCase();
+    const r = result.perAsset.find((x: { key: string }) => x.key === usdmKey);
+    assert.ok(r);
+    assert.equal(r!.loans.liquidatable, 0);
+    assert.equal(r!.loans.liquidationSkippedUnpriceable, 0);
+  });
+
+  await t('computeFluidHealth: unpriceable native collateral → loan skipped, NOT liquidatable', async () => {
+    // The previous resolver said "every non-ADA principal = USD-stable" and
+    // saw `collateralLovelace = min-ADA` only; verdict was `liquidatable=true`
+    // for almost every native-collateralized loan. With the new resolver,
+    // when a collateral asset has no rate we skip the loan entirely.
+    const SNEK = { policyId: '279c909f348e533da5808898f87f9a14bb2c3dfbbacccd631d927a3f', assetNameHex: '534e454b' };
+    utxoMap.set(FLUID.poolSpendHash, []);
+    utxoMap.set(FLUID.loanSpendHash, [
+      bridgeUtxoWithNft({
+        policyId: FLUID.loanPolicy,
+        nftAssetNameHex: 'dd'.repeat(28),
+        lovelace: '1500000',
+        datumHex: buildLoanDatum({
+          principal: 100_000_000n, lendDateMs: Date.now(),
+          principalAsset: USDM, interestRate: 400,
+          poolIdHex: '504f4f4c' + '03'.repeat(26),
+        }),
+        extraAssets: [
+          { unit: SNEK.policyId + SNEK.assetNameHex, policyId: SNEK.policyId, assetNameHex: SNEK.assetNameHex, quantity: '1000000000' },
+        ],
+      }),
+    ]);
+
+    const result = await computeFluidHealth({
+      fetchAllPools: ft._fetchAllPools,
+      fetchAllLoans: ft._fetchAllLoans,
+      assetToLovelaceRate: (asset: { policyId: string; assetNameHex: string }) => {
+        if (asset.policyId === '' && asset.assetNameHex === '') return 1;
+        if (asset.policyId === USDM.policyId && asset.assetNameHex === USDM.assetNameHex) return 2_000_000;
+        return null;  // SNEK unpriced
+      },
+    });
+    const usdmKey = (USDM.policyId + USDM.assetNameHex).toLowerCase();
+    const r = result.perAsset.find((x: { key: string }) => x.key === usdmKey);
+    assert.ok(r);
+    assert.equal(r!.loans.liquidatable, 0);
+    assert.equal(r!.loans.liquidationSkippedUnpriceable, 1);
+  });
+
+  await t('computeFluidHealth: unpriceable principal → loan skipped (no false-positive liquidation)', async () => {
+    // Long-tail principal (e.g. SNEK lent against ADA collateral). Without
+    // a SNEK→lovelace rate we cannot evaluate LTV; the conservative call is
+    // to skip and surface the gap, not to assume `1/adaUsd` like before.
+    const SNEK = { policyId: '279c909f348e533da5808898f87f9a14bb2c3dfbbacccd631d927a3f', assetNameHex: '534e454b' };
+    utxoMap.set(FLUID.poolSpendHash, []);
+    utxoMap.set(FLUID.loanSpendHash, [
+      bridgeUtxoWithNft({
+        policyId: FLUID.loanPolicy,
+        nftAssetNameHex: 'ee'.repeat(28),
+        lovelace: '50000000',  // 50 ADA collateral
+        datumHex: buildLoanDatum({
+          principal: 1_000_000n, lendDateMs: Date.now(),
+          principalAsset: SNEK, interestRate: 400,
+          poolIdHex: '504f4f4c' + '04'.repeat(26),
+        }),
+      }),
+    ]);
+
+    const result = await computeFluidHealth({
+      fetchAllPools: ft._fetchAllPools,
+      fetchAllLoans: ft._fetchAllLoans,
+      assetToLovelaceRate: (asset: { policyId: string; assetNameHex: string }) => {
+        if (asset.policyId === '' && asset.assetNameHex === '') return 1;
+        return null;
+      },
+    });
+    const snekKey = (SNEK.policyId + SNEK.assetNameHex).toLowerCase();
+    const r = result.perAsset.find((x: { key: string }) => x.key === snekKey);
+    assert.ok(r);
+    assert.equal(r!.loans.liquidatable, 0);
+    assert.equal(r!.loans.liquidationSkippedUnpriceable, 1);
   });
 
   bridge.getUtxosAtCredential = orig.getUtxosAtCredential;

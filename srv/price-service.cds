@@ -445,6 +445,10 @@ service PriceService {
     currentDebtRaw : String;
     collateralLovelace : String;
     liquidatable   : Integer;
+    // Loans excluded from liquidation eval because principal- or collateral-
+    // asset has no known lovelace-rate. Lets consumers tell "no risk" from
+    // "we don't have enough price feeds to evaluate".
+    liquidationSkippedUnpriceable : Integer;
     late           : Integer;
     permissionedPoolCount : Integer;
   }

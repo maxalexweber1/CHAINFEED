@@ -1,0 +1,58 @@
+# Dolos — lightweight Cardano data node for CHAINFEED.
+#
+# Replaces Blockfrost/Koios free-tier as the primary on-chain data source.
+# Speaks Blockfrost-compatible REST (MiniBF) on :3000 plus gRPC UTxO RPC on
+# :50051 — once Mithril bootstrap is complete (~few hours mainnet) this
+# eliminates the daily-quota problem entirely.
+#
+# First-time setup (one-shot bootstrap, then start as daemon):
+#     docker compose -f docker-compose.dolos.yml run --rm dolos bootstrap mithril
+#     docker compose -f docker-compose.dolos.yml up -d
+#
+# Live status:
+#     docker compose -f docker-compose.dolos.yml logs -f dolos
+#     curl http://localhost:3100/api/v0/health
+#
+# Pinned to v1.1.1 (current as of 2026-05-06). Bump only after smoke-testing.
+
+services:
+  dolos:
+    image: ghcr.io/txpipe/dolos:v1.1.1
+    container_name: chainfeed-dolos
+    restart: unless-stopped
+    ports:
+      # Mini-Blockfrost — Blockfrost-API-compatible REST. CHAINFEED's primary
+      # backend integration target; ODATANO can hit this with a fake API key.
+      # Host 3100 (not Dolos's default 3000) to avoid the Next.js dev port.
+      - "3100:3000"
+      # Mini-Kupo — pattern-based UTxO lookup, drop-in for kupo HTTP clients.
+      - "1442:1442"
+      # gRPC / UTxO RPC — used by Pallas-based clients. Optional for us.
+      - "50051:50051"
+    volumes:
+      - ./infra/dolos/daemon.toml:/etc/dolos/daemon.toml:ro
+      # Persistent ledger state. Mithril snapshot lands here on first bootstrap
+      # and incremental block-fetches keep it warm.
+      - dolos-data:/data
+      # Shared Unix socket for n2c clients (e.g. a future Ogmios sidecar).
+      # Empty on first run; Dolos creates `dolos.socket` inside on daemon start.
+      - dolos-socket:/socket
+    # Default entrypoint = `dolos`. Add `daemon` so `up` runs in serve mode.
+    # Bootstrap is invoked separately via `docker compose run` (above).
+    command: ["daemon"]
+    healthcheck:
+      # MiniBF /health returns 200 once the node is synced enough to serve
+      # queries. start_period generous because tip-catchup after Mithril
+      # restore can take 10-30 minutes before the API responds reliably.
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3000/api/v0/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 1800s
+
+volumes:
+  # Named volumes survive `docker compose down` — only `down -v` wipes them.
+  # Re-running bootstrap on existing data is a no-op (Dolos detects state and
+  # resumes incremental sync from the latest stored point).
+  dolos-data:
+  dolos-socket:

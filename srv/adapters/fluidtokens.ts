@@ -163,8 +163,10 @@ interface LoanSnapshot {
   outputIndex: number;
   /** Collateral held in the UTxO (lovelace — primary collateral form). */
   collateralLovelace: bigint;
-  /** Native-token collateral (if any) in the UTxO, excluding the loan-NFT. */
-  nativeCollateral: Array<{ unit: string; quantity: string }>;
+  /** Native-token collateral (if any) in the UTxO, excluding the loan-NFT.
+   *  Carries `policyId` + `assetNameHex` so the health module can price each
+   *  asset via the price-fanout — `unit` (concat) kept for downstream display. */
+  nativeCollateral: Array<{ policyId: string; assetNameHex: string; unit: string; quantity: string }>;
   /** Pool the loan was issued from — links back via PoolDatum.poolIdHex. */
   poolIdHex: string;
   datum: DecodedLoanDatum;
@@ -181,7 +183,12 @@ function parseLoanUtxo(u: BridgeUtxo, loanPolicy: string): LoanSnapshot | null {
 
   const nativeCollateral = (u.assets ?? [])
     .filter(a => a.policyId !== loanPolicy && a.unit && a.quantity)
-    .map(a => ({ unit: a.unit!, quantity: a.quantity! }));
+    .map(a => ({
+      policyId:     a.policyId     ?? '',
+      assetNameHex: a.assetNameHex ?? '',
+      unit:         a.unit!,
+      quantity:     a.quantity!,
+    }));
 
   return {
     loanIdHex: loanNft.assetNameHex ?? '',
