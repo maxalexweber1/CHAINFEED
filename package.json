@@ -53,7 +53,7 @@
           "koios",
           "blockfrost"
         ],
-        "blockfrostApiKey": "mainneto3W0EZiAmZIYO83hTlI9G8G2XuJ7890s",
+        "blockfrostApiKey": "your_blockfrost_api_key_here",
         "blockfrostCustomBackend": "",
         "txBuilders": [
           "buildooor"
@@ -63,7 +63,7 @@
       },
       "watch": {
         "network": "mainnet",
-        "blockfrostApiKey": "mainneto3W0EZiAmZIYO83hTlI9G8G2XuJ7890s",
+        "blockfrostApiKey": "your_blockfrost_api_key_here",
         "blockfrostCustomBackend": "",
         "koiosApiKey": "",
         "autoStart": false,
