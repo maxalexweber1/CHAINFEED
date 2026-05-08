@@ -31,6 +31,7 @@ import djedReserves from './djed-reserves';
 import indigoCdp from './indigo-cdp';
 import circleUsdcAttestation from './circle-usdc-attestation';
 import fluidtokens from './fluidtokens';
+import liqwid from './liqwid';
 
 const log = cds.log('adapters');
 type LogLevel = 'debug' | 'info' | 'warn' | 'error';
@@ -75,13 +76,18 @@ const circleUsdcAttestationCached = withCache(circleUsdcAttestation, { ttlMs: 60
 // TTL keeps Blockfrost cost bounded when the dashboard re-renders (paginated
 // 1000-UTxO reads are expensive); aligned with the dashboard ISR window.
 const fluidtokensCached = withCache(fluidtokens, { ttlMs: 300_000, log: cacheLog });
+// Liqwid: 3 mainnet stable markets + 1 GraphQL fanout per refresh. Each market's
+// MarketState UTxO updates per batch settlement (~62s on-chain cadence). 5-minute
+// TTL is plenty — APY values move on epoch-scale, on-chain reserves move on
+// supply/borrow tx scale. Aligned with FluidTokens for dashboard ISR consistency.
+const liqwidCached = withCache(liqwid, { ttlMs: 300_000, log: cacheLog });
 
 // Oracle + attestation sources are excluded from DEX-only fanouts (arbitrage).
 // Update both `ALL_SOURCES` and the `ORACLE_SOURCE_NAMES` set when adding
 // either kind of non-DEX source.
 const ORACLE_SOURCE_NAMES: ReadonlySet<string> = new Set([
   'orcfax', 'charli3', 'djed-reserves', 'indigo-cdp', 'circle-usdc-attestation',
-  'fluidtokens',
+  'fluidtokens', 'liqwid',
 ]);
 
 /**
@@ -93,6 +99,7 @@ export const ALL_SOURCES: PriceAdapter[] = [
   orcfaxCached, charli3Cached, minswapCached, minswapV2Cached, sundaeswapCached,
   wingridersCached, wingridersStableswapCached,
   djedReservesCached, indigoCdpCached, circleUsdcAttestationCached, fluidtokensCached,
+  liqwidCached,
 ];
 
 /**
@@ -103,6 +110,7 @@ const ALL_CACHED_SOURCES: CachedAdapter[] = [
   orcfaxCached, charli3Cached, minswapCached, minswapV2Cached, sundaeswapCached,
   wingridersCached, wingridersStableswapCached,
   djedReservesCached, indigoCdpCached, circleUsdcAttestationCached, fluidtokensCached,
+  liqwidCached,
 ];
 
 /**

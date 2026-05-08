@@ -3,15 +3,15 @@
  *
  * Native-script (sig-only) policy bound to the dev wallet's payment vkey.
  * Mints 1_000_000_000_000 raw units (= 1,000,000 USDM at 6 decimals) to the
- * dev wallet. Writes the resulting policy ID into .env.local.
+ * dev wallet. Writes the resulting policy ID into .env.
  *
- * Prereqs (in .env.local, sourced into env):
+ * Prereqs (in .env, sourced into env):
  *   - CHAINFEED_WALLET_MNEMONIC
  *   - BLOCKFROST_API_KEY (preprod)
  *   - NETWORK=preprod, BACKENDS=blockfrost, TX_BUILDERS=buildooor
  *
  * Run:
- *   set -a && source .env.local && set +a && node scripts/mint-mock-usdm.js
+ *   set -a && source .env && set +a && node scripts/mint-mock-usdm.js
  */
 
 import * as fs from 'node:fs';
@@ -24,7 +24,7 @@ const bridge = require('../srv/external/odatano-bridge');
 const NETWORK_ID    = 0;                          // 0 = testnet (preprod/preview), 1 = mainnet
 const ASSET_NAME    = process.env.X402_USDM_NAME_HEX || '0014df105553444d';
 const MINT_RAW      = 1_000_000_000_000n;         // 1,000,000 USDM at 6 decimals
-const ENV_LOCAL     = path.join(__dirname, '..', '.env.local');
+const ENV_LOCAL     = path.join(__dirname, '..', '.env');
 
 const harden = (n: number) => n | 0x80000000;
 
@@ -92,7 +92,7 @@ function appendEnvLine(key: string, value: string): void {
 
 async function main() {
   const mnemonic = process.env.CHAINFEED_WALLET_MNEMONIC;
-  if (!mnemonic) throw new Error('CHAINFEED_WALLET_MNEMONIC not set — source .env.local');
+  if (!mnemonic) throw new Error('CHAINFEED_WALLET_MNEMONIC not set — source .env');
   if (!process.env.BLOCKFROST_API_KEY) throw new Error('BLOCKFROST_API_KEY not set');
 
   const { payment, stake } = deriveKeys(mnemonic);
@@ -199,7 +199,7 @@ async function main() {
 
   // Persist policy ID for downstream x402 work
   appendEnvLine('X402_USDM_POLICY', policyHex);
-  console.log(`\nWrote X402_USDM_POLICY=${policyHex} to .env.local`);
+  console.log(`\nWrote X402_USDM_POLICY=${policyHex} to .env`);
 
   await bridge.shutdown();
 }

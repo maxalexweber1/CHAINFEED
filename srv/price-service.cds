@@ -469,4 +469,50 @@ service PriceService {
    * 'fluidtokens-ADA-liquidatable-3') for consumer matching.
    */
   action getFluidtokensHealth() returns FluidHealthResult;
+
+  // ── Liqwid Finance v2 — stable lending markets ───────────────────────
+  // Hybrid read pattern: supply/borrow/utilization/qTokenRate from on-chain
+  // MarketState datums (verifiable), supplyAPY/borrowAPY/lqSupplyAPY from
+  // Liqwid's GraphQL (closed-source v2 contracts make rate-curve params
+  // opaque). `apySource` makes the provenance split explicit per row.
+
+  type LiqwidMarketRollup {
+    symbol           : String;       // 'DJED' | 'iUSD' | 'USDM'
+    liqwidId         : String;       // Liqwid GraphQL id ('DJED' | 'IUSD' | 'USDM')
+    txHash           : String;       // MarketState UTxO ref
+    outputIndex      : Integer;
+    decimals         : Integer;      // uniform 6 for in-scope markets
+    supplyRaw        : String;       // idle / unborrowed underlying
+    principalRaw    : String;        // total borrowed
+    reserveRaw       : String;       // protocol reserve cut
+    totalSuppliedRaw : String;       // supply + principal + reserve
+    qTokenSupplyRaw  : String;
+    qTokenRate       : Decimal(18,9); // num / denom — 1 qToken redeems for X underlying
+    utilization      : Decimal(6,4);  // 0..1, Compound semantics
+    // APY values from Liqwid's GraphQL — null when API call failed or market
+    // is frozen / private / delisting.
+    supplyAPY        : Decimal(8,6) null;
+    borrowAPY        : Decimal(8,6) null;
+    lqSupplyAPY      : Decimal(8,6) null;
+    apyUpdatedAt     : Timestamp null;
+    lastInterestUpdateMs : Integer64;
+    nextBatchDeadlineMs  : Integer64;
+  }
+
+  type LiqwidHealthResult {
+    network         : String;
+    computedAt      : Timestamp;
+    marketCount     : Integer;
+    apySource       : String;         // 'liqwid-api' or 'unavailable'
+    perMarket       : array of LiqwidMarketRollup;
+    alerts          : array of String; // 'liqwid-apy-source-down', etc.
+  }
+
+  /**
+   * Composite Liqwid v2 health view. Reads the singleton MarketState UTxO
+   * for each in-scope stable market (DJED, iUSD, USDM) and merges with the
+   * APY snapshot from Liqwid's GraphQL API. Liqwid v2 is closed-source so
+   * APY is "trust Liqwid" — utilization and reserves are direct on-chain.
+   */
+  action getLiqwidHealth() returns LiqwidHealthResult;
 }

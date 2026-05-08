@@ -9,7 +9,7 @@
   },
   "dependencies": {
     "@odatano/core": "^1.7.7",
-    "@odatano/watch": "^0.1.7",
+    "@odatano/watch": "^0.1.8",
     "@sap/cds": "^9",
     "express": "^4"
   },
@@ -53,7 +53,6 @@
           "koios",
           "blockfrost"
         ],
-        "blockfrostApiKey": "your_blockfrost_api_key_here",
         "blockfrostCustomBackend": "",
         "txBuilders": [
           "buildooor"
@@ -63,7 +62,6 @@
       },
       "watch": {
         "network": "mainnet",
-        "blockfrostApiKey": "your_blockfrost_api_key_here",
         "blockfrostCustomBackend": "",
         "koiosApiKey": "",
         "autoStart": false,

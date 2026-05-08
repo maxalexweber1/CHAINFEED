@@ -3,11 +3,8 @@
  * service paths.
  *
  * Mount strategy: gate everything under `/odata/v4/price` (the read-only
- * aggregated-price service). `/odata/v4/marketplace` stays free in v0.1
- * (provider registration is a marketplace primitive, not a paid call).
- *
- * `$metadata` and `$batch` are always exempt — buyers must be able to
- * discover the service surface without paying.
+ * aggregated-price service). `$metadata` and `$batch` are always exempt
+ * — buyers must be able to discover the service surface without paying.
  *
  * If receiver-wallet env vars are missing (no `.env.local` sourced), we
  * skip the mount with a warning rather than crashing — the rest of the

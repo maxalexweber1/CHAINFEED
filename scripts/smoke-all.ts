@@ -49,6 +49,9 @@ const SMOKES: SmokeJob[] = [
   // Mainnet-only (FLUIDTOKENS_NETWORK=mainnet enforced internally), so it
   // ignores the global NETWORK env and always hits mainnet Koios.
   { name: 'fluidtokens',          file: 'smoke-fluidtokens.ts',          category: 'chain', parallelSafe: false, timeoutMs: 120_000 },
+  // Liqwid v2 reads 3 singleton MarketState UTxOs (one per stable market) +
+  // a single GraphQL fanout for APY. Way lighter than FluidTokens — 30s ample.
+  { name: 'liqwid',               file: 'smoke-liqwid.ts',               category: 'chain', parallelSafe: false, timeoutMs: 30_000 },
 ];
 
 interface SmokeResult {

@@ -1,11 +1,11 @@
 /**
  * Generate a fresh Cardano wallet (BIP39 mnemonic + CIP-1852 derivation)
- * and write it to .env.local. Used for the CHAINFEED dev receiver wallet
+ * and write it to .env. Used for the CHAINFEED dev receiver wallet
  * (preprod). Run once; persist the mnemonic securely.
  *
  * Output:
  *   - prints the bech32 base addresses (preprod + mainnet) to stdout
- *   - writes a `# CHAINFEED dev wallet` block to .env.local (or stdout if
+ *   - writes a `# CHAINFEED dev wallet` block to .env (or stdout if
  *     the file already contains an X402_PAY_TO line — bail rather than
  *     overwrite an existing wallet)
  *
@@ -18,7 +18,7 @@ import * as path from 'node:path';
 import * as bip39 from 'bip39';
 import * as CSL from '@emurgo/cardano-serialization-lib-nodejs';
 
-const ENV_LOCAL = path.join(__dirname, '..', '.env.local');
+const ENV_LOCAL = path.join(__dirname, '..', '.env');
 
 function harden(n: number): number { return n | 0x80000000; }
 
@@ -74,7 +74,7 @@ function main(): void {
   if (fs.existsSync(ENV_LOCAL)) {
     existing = fs.readFileSync(ENV_LOCAL, 'utf8');
     if (/^X402_PAY_TO=/m.test(existing)) {
-      console.error('REFUSING to overwrite — .env.local already has X402_PAY_TO set.');
+      console.error('REFUSING to overwrite — .env already has X402_PAY_TO set.');
       console.error('Delete the existing wallet block manually if you want a new wallet.');
       process.exit(2);
     }
@@ -82,7 +82,7 @@ function main(): void {
 
   fs.writeFileSync(ENV_LOCAL, existing + block, { mode: 0o600 });
 
-  console.log('Wallet generated and written to .env.local (chmod 600).');
+  console.log('Wallet generated and written to .env (chmod 600).');
   console.log('');
   console.log('Preprod address: ' + preprodAddr);
   console.log('Mainnet address: ' + mainnetAddr);
@@ -91,7 +91,7 @@ function main(): void {
   console.log('  1. Faucet preprod tADA to the preprod address above:');
   console.log('     https://docs.cardano.org/cardano-testnets/tools/faucet/');
   console.log('  2. Once funded, run the mock-USDM mint script (next).');
-  console.log('  3. The mnemonic is in .env.local. Back it up if you want to keep this wallet.');
+  console.log('  3. The mnemonic is in .env. Back it up if you want to keep this wallet.');
 }
 
 main();

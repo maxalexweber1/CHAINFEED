@@ -32,6 +32,9 @@ import { computeStableHealth } from './lib/stable-health';
 import { computeFluidHealth } from './lib/fluidtokens-health';
 import fluidtokens from './adapters/fluidtokens';
 import { resolveFluidNetwork } from './lib/fluidtokens-config';
+import liqwid from './adapters/liqwid';
+import { resolveLiqwidNetwork } from './lib/liqwid-config';
+import { totalSuppliedRaw, utilizationFraction, qTokenRate } from './lib/liqwid-decoder';
 import {
   bucketSamples, intervalToMs, maxLookbackMsForInterval, isValidInterval,
   type Interval as OhlcvInterval,
@@ -809,6 +812,46 @@ export = cds.service.impl(async function () {
         liquidationSkippedUnpriceable: r.loans.liquidationSkippedUnpriceable,
         late:                          r.loans.late,
         permissionedPoolCount:         r.pools.permissionedCount,
+      })),
+      alerts,
+    };
+  });
+
+  this.on('getLiqwidHealth', async (req) => {
+    let network: string;
+    try { network = resolveLiqwidNetwork(); }
+    catch (err) { return req.error(503, (err as Error).message); }
+
+    const r = await liqwid._fetchAllMarkets();
+
+    const alerts: string[] = [];
+    if (r.apySourceFailed) alerts.push('liqwid-apy-source-down');
+    if (r.markets.length === 0) alerts.push('liqwid-no-markets-found');
+
+    return {
+      network,
+      computedAt: new Date().toISOString(),
+      marketCount: r.markets.length,
+      apySource: r.apySourceFailed ? 'unavailable' : 'liqwid-api',
+      perMarket: r.markets.map(m => ({
+        symbol:   m.symbol,
+        liqwidId: m.liqwidId,
+        txHash:   m.txHash,
+        outputIndex: m.outputIndex,
+        decimals: 6,
+        supplyRaw:        m.state.supplyRaw.toString(),
+        principalRaw:     m.state.principalRaw.toString(),
+        reserveRaw:       m.state.reserveRaw.toString(),
+        totalSuppliedRaw: totalSuppliedRaw(m.state).toString(),
+        qTokenSupplyRaw:  m.state.qTokenSupplyRaw.toString(),
+        qTokenRate:       qTokenRate(m.state),
+        utilization:      utilizationFraction(m.state),
+        supplyAPY:    m.apy?.supplyAPY   ?? null,
+        borrowAPY:    m.apy?.borrowAPY   ?? null,
+        lqSupplyAPY:  m.apy?.lqSupplyAPY ?? null,
+        apyUpdatedAt: m.apy?.updatedAt   ?? null,
+        lastInterestUpdateMs: m.state.lastInterestUpdateMs,
+        nextBatchDeadlineMs:  m.state.nextBatchDeadlineMs,
       })),
       alerts,
     };

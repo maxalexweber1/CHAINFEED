@@ -2,18 +2,6 @@ namespace chainfeed;
 
 using { cuid, managed } from '@sap/cds/common';
 
-// Pull the @odatano/watch plugin's CDS models into our compiled schema so
-// CAP's in-memory SQLite auto-deploy creates the watcher's tables on boot.
-// Without this `using` line the plugin services load (you'll see
-// CardanoWatcherAdminService served), but the DDL for WatchedCredential/
-// WatchedAddress/WatchedPolicy/BlockchainEvent is NEVER issued — the
-// watcher then tries to query non-existent tables and crashes its poll
-// loop with `no such table: CardanoWatcherAdminService_WatchedCredentials`.
-// Same root cause as the persistent-SQLite BUG 5 noted in CLAUDE.md for
-// @odatano/core. Adding the import fixes it for in-memory; for production
-// HANA or persistent SQLite, run `cds deploy` or the deploy-db.js helper.
-using from '@odatano/watch';
-
 entity AggregatedPrices : cuid, managed {
   pair            : String(20);
   price           : Decimal(20,10);
@@ -38,26 +26,9 @@ entity PriceSources : cuid {
   rawPayload    : LargeString;
 }
 
-entity FeedProviders : cuid, managed {
-  name              : String(100);
-  walletAddress     : String(120);
-  contactEmail      : String(120);
-  feeds             : Composition of many ProviderFeeds on feeds.provider = $self;
-  totalEarningsUSDM : Decimal(20,6) default 0;
-  active            : Boolean default true;
-}
-
-entity ProviderFeeds : cuid, managed {
-  provider          : Association to FeedProviders;
-  feedId            : String(50);
-  description       : String(500);
-  pricePerCallUSDM  : Decimal(20,6);
-  endpointUrl       : String(500);
-  totalCalls        : Integer default 0;
-  totalEarnings     : Decimal(20,6) default 0;
-  active            : Boolean default true;
-}
-
+// Audit trail for paid x402 reads. Written by `srv/x402/process.ts` and
+// `srv/x402/verify-confirmed.ts` after settlement. NOT a user-facing
+// entity — internal record only.
 entity FeedReads : cuid {
   feedKind          : String(50);
   feedRef           : String(100);
