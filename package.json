@@ -29,10 +29,14 @@
     "start": "cross-env CDS_TYPESCRIPT=1 NETWORK=mainnet NODE_OPTIONS=\"--import tsx\" cds-serve",
     "dev": "cross-env CDS_TYPESCRIPT=1 NETWORK=mainnet NODE_OPTIONS=\"--import tsx\" cds watch",
     "build": "cds build --production && tsc",
+    "db:deploy": "cds deploy --to sqlite:db.sqlite",
+    "db:reset": "node -e \"require('fs').rmSync('db.sqlite',{force:true})\" && npm run db:deploy",
     "typecheck": "tsc --noEmit",
     "check-no-js": "node -e \"const r=require('child_process').execSync('git ls-files srv scripts',{encoding:'utf8'}).split('\\n').filter(f=>/^(srv|scripts)\\/.+\\.js$/.test(f));if(r.length){console.error('TS-only policy: forbidden .js files:\\n'+r.join('\\n'));process.exit(1)}\"",
     "test": "echo \"no tests yet\" && exit 0",
     "smoke": "tsx scripts/smoke-all.ts",
+    "aiken:build": "cd contracts && aiken check && aiken build",
+    "demo:aiken": "node --import tsx scripts/demo-aiken-flow.ts",
     "lint": "eslint .",
     "app:install": "npm --prefix app install",
     "app:dev": "npm --prefix app run dev",
@@ -44,7 +48,7 @@
       "db": {
         "kind": "sqlite",
         "credentials": {
-          "url": ":memory:"
+          "url": "db.sqlite"
         }
       },
       "odatano-core": {

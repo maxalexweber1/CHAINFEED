@@ -13,9 +13,11 @@
  * register, and we silently fall back to TTL-based polling. Same for any
  * upstream Koios/Blockfrost outage — events stop, polling stays.
  *
- * **POC scope**: only Indigo CDP today (Phase A of the ODATANO-WATCH 0.1.4
- * migration). Add new credentials to `WATCHED_CREDENTIALS` once the pattern
- * is validated.
+ * Migration status: Indigo CDP, DJED reserves, Minswap V2 (asset-filtered),
+ * Charli3 (5 per-pair address watches), Orcfax FS UTxO, FluidTokens pool +
+ * loan credentials, Liqwid 3 stable markets — all wired event-driven.
+ * Add new credentials/addresses by appending to `WATCHED_CREDENTIALS` /
+ * `WATCHED_ADDRESSES` and registering a tag → source mapping.
  */
 
 import cds from '@sap/cds';
@@ -77,6 +79,24 @@ const WATCHED_CREDENTIALS: WatchedCredentialConfig[] = [
     coalesceMs:           5_000,                  // pool swaps burst — coalesce a bit longer
     includesAssetsJson:   STABLE_ASSETS_FILTER,
   },
+  // FluidTokens v3 — both pool and loan credentials feed the same adapter.
+  // Two registrations because the pool and loan validators are separate
+  // scripts (different credentials), but the adapter doesn't care which
+  // one fired the event — either way `fluidtokens` source is invalidated.
+  {
+    paymentCredHex:       'ad353a777c817f4d9d6c4324930f5c6128400517ec9dae0461e034cd',
+    description:          'FluidTokens v3 pool spend script (mainnet)',
+    tag:                  'fluidtokens',
+    invalidateSourceName: 'fluidtokens',
+    coalesceMs:           5_000,
+  },
+  {
+    paymentCredHex:       '5abbaa2eb177b574707fa3617e3436295d45d7795e0874623a9504da',
+    description:          'FluidTokens v3 loan spend script (mainnet)',
+    tag:                  'fluidtokens',
+    invalidateSourceName: 'fluidtokens',
+    coalesceMs:           5_000,
+  },
 ];
 
 interface WatchedAddressConfig {
@@ -104,6 +124,12 @@ const WATCHED_ADDRESSES: WatchedAddressConfig[] = [
   { address: 'addr1w88fmwyufz9vdqkukzhaerjxcfm488wsnyrft9cpjtd4utsnw5ym7', description: 'Charli3 USDM-RESERVES ODV feed', tag: 'charli3', invalidateSourceName: 'charli3' },
   // Orcfax mainnet FS UTxO script — one address covers every FS publication
   { address: 'addr1wyvnaejjzxanknsw5hm4raq4y6f4tfjsut3hqmmztn035jc4rpcfn', description: 'Orcfax FS UTxO script (mainnet)', tag: 'orcfax', invalidateSourceName: 'orcfax' },
+  // Liqwid v2 stable MarketState UTxOs (one singleton per market). 60s
+  // coalesce because Liqwid settles batches every ~62s; firing more often
+  // is wasted (the index doesn't move between batches).
+  { address: 'addr1w85g7uhkk3nnmduwlc2gk8xep35fz9wak0t7x44qqqc53ncahh4lz', description: 'Liqwid qDJED MarketState (mainnet)', tag: 'liqwid', invalidateSourceName: 'liqwid', coalesceMs: 60_000 },
+  { address: 'addr1w94gxm5tksyw75gs5arhqwdf7h7yre2ma878ad2xfhhcy6cq7q4tp', description: 'Liqwid qiUSD MarketState (mainnet)', tag: 'liqwid', invalidateSourceName: 'liqwid', coalesceMs: 60_000 },
+  { address: 'addr1wyz6rmlg2g88hnp8ugeakh6m2p9nng2w39a4vss0x0u0z0cqvh2js', description: 'Liqwid qUSDM MarketState (mainnet)', tag: 'liqwid', invalidateSourceName: 'liqwid', coalesceMs: 60_000 },
 ];
 
 /** Minimal subset of CredentialNewTransactionsEvent we read off the bus. */

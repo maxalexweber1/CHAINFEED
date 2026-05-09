@@ -33,6 +33,7 @@ import {
   type DecodedMarketState,
 } from '../lib/liqwid-decoder';
 import { fetchAllLiqwidApy, type LiqwidApyData } from '../lib/liqwid-graphql';
+import { recordAndDerive, deriveSupplyAPY, type DerivedRates } from '../lib/liqwid-finance';
 
 const SOURCE_NAME = 'liqwid';
 const PAIR_POOLS  = 'LIQWID-POOLS';
@@ -158,28 +159,45 @@ async function getPrice(pair: string): Promise<AttestationQuote> {
       marketCount: r.markets.length,
       apySourceFailed: r.apySourceFailed,
       apySource: 'liqwid-api',
-      markets: r.markets.map(m => ({
-        symbol:    m.symbol,
-        liqwidId:  m.liqwidId,
-        txHash:    m.txHash,
-        outputIndex: m.outputIndex,
-        // Decimals are uniform-6 across in-scope markets — divide downstream.
-        supplyRaw:           m.state.supplyRaw.toString(),
-        principalRaw:        m.state.principalRaw.toString(),
-        reserveRaw:          m.state.reserveRaw.toString(),
-        totalSuppliedRaw:    totalSuppliedRaw(m.state).toString(),
-        qTokenSupplyRaw:     m.state.qTokenSupplyRaw.toString(),
-        qTokenRate:          qTokenRate(m.state),
-        utilization:         utilizationFraction(m.state),
-        lastInterestUpdateMs: m.state.lastInterestUpdateMs,
-        nextBatchDeadlineMs:  m.state.nextBatchDeadlineMs,
-        apy: m.apy && {
-          supplyAPY:   m.apy.supplyAPY,
-          borrowAPY:   m.apy.borrowAPY,
-          lqSupplyAPY: m.apy.lqSupplyAPY,
-          updatedAt:   m.apy.updatedAt,
-        },
-      })),
+      markets: r.markets.map(m => {
+        // Empirical APR/APY from interestIndex deltas. First call per process
+        // returns null (no baseline yet); subsequent calls ≥ 60s apart derive
+        // the rate. GraphQL APY remains the canonical short-term value;
+        // observedBorrowAPR is the on-chain-verifiable fallback.
+        const derived: DerivedRates | null = recordAndDerive(
+          m.symbol, m.state.interestIndex, m.state.lastInterestUpdateMs,
+        );
+        const util = utilizationFraction(m.state);
+        return {
+          symbol:    m.symbol,
+          liqwidId:  m.liqwidId,
+          txHash:    m.txHash,
+          outputIndex: m.outputIndex,
+          // Decimals are uniform-6 across in-scope markets — divide downstream.
+          supplyRaw:           m.state.supplyRaw.toString(),
+          principalRaw:        m.state.principalRaw.toString(),
+          reserveRaw:          m.state.reserveRaw.toString(),
+          totalSuppliedRaw:    totalSuppliedRaw(m.state).toString(),
+          qTokenSupplyRaw:     m.state.qTokenSupplyRaw.toString(),
+          qTokenRate:          qTokenRate(m.state),
+          utilization:         util,
+          lastInterestUpdateMs: m.state.lastInterestUpdateMs,
+          nextBatchDeadlineMs:  m.state.nextBatchDeadlineMs,
+          apy: m.apy && {
+            supplyAPY:   m.apy.supplyAPY,
+            borrowAPY:   m.apy.borrowAPY,
+            lqSupplyAPY: m.apy.lqSupplyAPY,
+            updatedAt:   m.apy.updatedAt,
+          },
+          observed: derived && {
+            borrowAPR:       derived.borrowAPR,
+            borrowAPY:       derived.borrowAPY,
+            supplyAPY:       deriveSupplyAPY(derived.borrowAPY, util),
+            observedDeltaMs: derived.observedDeltaMs,
+            baselineAtMs:    derived.baselineAtMs,
+          },
+        };
+      }),
     },
   };
 }

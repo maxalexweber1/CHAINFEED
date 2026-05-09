@@ -1,0 +1,178 @@
+{
+  "preamble": {
+    "title": "chainfeed/contracts",
+    "description": "Aiken contracts for project 'chainfeed/contracts'",
+    "version": "0.0.0",
+    "plutusVersion": "v3",
+    "compiler": {
+      "name": "Aiken",
+      "version": "v1.1.21+42babe5"
+    },
+    "license": "Apache-2.0"
+  },
+  "validators": [
+    {
+      "title": "stop_loss.stop_loss.spend",
+      "datum": {
+        "title": "datum",
+        "schema": {
+          "$ref": "#/definitions/stop_loss~1Datum"
+        }
+      },
+      "redeemer": {
+        "title": "redeemer",
+        "schema": {
+          "$ref": "#/definitions/stop_loss~1Redeemer"
+        }
+      },
+      "compiledCode": "5902cb01010029800aba2aba1aab9faab9eaab9dab9a48888896600264653001300700198039804000cdc3a400530070024888966002600460106ea800e2653001300c00198061806800cdc3a40009112cc004c004c030dd500444c8c8c96600260260051323322598009803801456600260266ea800e0031640511598009806001456600260266ea800e0031640511640448088c040dd50008acc004c014c040dd500144c8c8c966002602e005132598009804980a1baa0018991919194c004dd6980d800cdd7180d8024dd6980d801cdd6980d80124444b300130200058acc004c044c070dd5009466002603e603a6ea804a46040604260426042003230203021001488966002653001375c600660426ea80126eccc08cc084dd5000cdd7180118109baa0015ca8c004c080dd500dc4c96600266e24cdc08009bad300330213754604660426ea8c008c084dd500e1bad30233024302430243024302137540091325980099b89002375a600260446ea8c090c088dd5180198111baa01d8acc004c058c084dd5181218111baa01d8acc004c8cc88cc008008004896600200314a115980099b8f375c604e00200714a31330020023028001408c8130dd618129813181318131813181318131813181318119baa01b375c604860446ea8016266e24dd6980098111baa005375a600660446ea8c090c088dd5180198111baa01d8b2040899b88375a600660446ea8c090c088dd5180198111baa01d375a600260446ea80150204590201181218129812800c5901f192cc004c068c080dd5000c4dd6981198109baa0018b203e302230203754600260406ea8c088c08cc08cc08cc08cc08cc08cc08cc080dd500c45901e22c80da2c80f0603600260340026032002602a6ea80062c8098c05800e2c80a8dd7180a800980a80098089baa0028b201e30120038b202230110013011001300d375401116402c3009375400716401c30070013003375400f149a26cac8009",
+      "hash": "99133ea88d67789a355b72e5bfd44018806faf7466aa9355bd265e23"
+    },
+    {
+      "title": "stop_loss.stop_loss.else",
+      "redeemer": {
+        "schema": {}
+      },
+      "compiledCode": "5902cb01010029800aba2aba1aab9faab9eaab9dab9a48888896600264653001300700198039804000cdc3a400530070024888966002600460106ea800e2653001300c00198061806800cdc3a40009112cc004c004c030dd500444c8c8c96600260260051323322598009803801456600260266ea800e0031640511598009806001456600260266ea800e0031640511640448088c040dd50008acc004c014c040dd500144c8c8c966002602e005132598009804980a1baa0018991919194c004dd6980d800cdd7180d8024dd6980d801cdd6980d80124444b300130200058acc004c044c070dd5009466002603e603a6ea804a46040604260426042003230203021001488966002653001375c600660426ea80126eccc08cc084dd5000cdd7180118109baa0015ca8c004c080dd500dc4c96600266e24cdc08009bad300330213754604660426ea8c008c084dd500e1bad30233024302430243024302137540091325980099b89002375a600260446ea8c090c088dd5180198111baa01d8acc004c058c084dd5181218111baa01d8acc004c8cc88cc008008004896600200314a115980099b8f375c604e00200714a31330020023028001408c8130dd618129813181318131813181318131813181318119baa01b375c604860446ea8016266e24dd6980098111baa005375a600660446ea8c090c088dd5180198111baa01d8b2040899b88375a600660446ea8c090c088dd5180198111baa01d375a600260446ea80150204590201181218129812800c5901f192cc004c068c080dd5000c4dd6981198109baa0018b203e302230203754600260406ea8c088c08cc08cc08cc08cc08cc08cc08cc080dd500c45901e22c80da2c80f0603600260340026032002602a6ea80062c8098c05800e2c80a8dd7180a800980a80098089baa0028b201e30120038b202230110013011001300d375401116402c3009375400716401c30070013003375400f149a26cac8009",
+      "hash": "99133ea88d67789a355b72e5bfd44018806faf7466aa9355bd265e23"
+    }
+  ],
+  "definitions": {
+    "ByteArray": {
+      "dataType": "bytes"
+    },
+    "Int": {
+      "dataType": "integer"
+    },
+    "chainfeed/ChainfeedQuote": {
+      "title": "ChainfeedQuote",
+      "description": "A price quote as published by CHAINFEED. Field order is the canonical\n payload — DON'T reorder unless you also bump the off-chain encoder\n version. The price is fixed-point `value × 1_000_000` to avoid floats\n (Plutus has no floating-point support).",
+      "anyOf": [
+        {
+          "title": "ChainfeedQuote",
+          "dataType": "constructor",
+          "index": 0,
+          "fields": [
+            {
+              "title": "pair",
+              "description": "Pair label as ASCII bytes — e.g. `#\"ADA-USD\"`. Pre-validate length\n off-chain; on-chain string-equality on ByteArray is cheap.",
+              "$ref": "#/definitions/ByteArray"
+            },
+            {
+              "title": "price_milli_units",
+              "description": "Price multiplied by 1_000_000. ADA-USD at $0.6234 → 623_400.\n Range: ~9.2 × 10¹⁵ (Plutus Int is 64-bit-ish; safe for any peg).",
+              "$ref": "#/definitions/Int"
+            },
+            {
+              "title": "valid_until_ms",
+              "description": "POSIX milliseconds when the quote stops being valid (set by CHAINFEED\n based on TTL of the underlying source).",
+              "$ref": "#/definitions/Int"
+            },
+            {
+              "title": "signed_at_ms",
+              "description": "POSIX milliseconds when CHAINFEED produced the signature. Use with\n `is_fresh` to enforce a max-age window from the consumer's perspective.",
+              "$ref": "#/definitions/Int"
+            }
+          ]
+        }
+      ]
+    },
+    "chainfeed/SignedQuote": {
+      "title": "SignedQuote",
+      "description": "A `ChainfeedQuote` plus its detached Ed25519 signature. This is the\n shape consumers should embed in their redeemer.",
+      "anyOf": [
+        {
+          "title": "SignedQuote",
+          "dataType": "constructor",
+          "index": 0,
+          "fields": [
+            {
+              "title": "quote",
+              "$ref": "#/definitions/chainfeed~1ChainfeedQuote"
+            },
+            {
+              "title": "signature",
+              "description": "64-byte raw Ed25519 signature over `cbor.serialise(quote)`.",
+              "$ref": "#/definitions/ByteArray"
+            }
+          ]
+        }
+      ]
+    },
+    "stop_loss/Action": {
+      "title": "Action",
+      "anyOf": [
+        {
+          "title": "Withdraw",
+          "dataType": "constructor",
+          "index": 0,
+          "fields": []
+        },
+        {
+          "title": "Liquidate",
+          "dataType": "constructor",
+          "index": 1,
+          "fields": []
+        }
+      ]
+    },
+    "stop_loss/Datum": {
+      "title": "Datum",
+      "description": "Locked-in conditions, written by the owner at funding time.",
+      "anyOf": [
+        {
+          "title": "Datum",
+          "dataType": "constructor",
+          "index": 0,
+          "fields": [
+            {
+              "title": "owner_pkh",
+              "description": "28-byte payment-key-hash that authorizes the `Withdraw` path.",
+              "$ref": "#/definitions/ByteArray"
+            },
+            {
+              "title": "liquidator_pkh",
+              "description": "28-byte payment-key-hash that receives funds on `Liquidate`.",
+              "$ref": "#/definitions/ByteArray"
+            },
+            {
+              "title": "liquidation_price_milli_units",
+              "description": "Floor price in milli-units (×1_000_000). Below this triggers liquidation.",
+              "$ref": "#/definitions/Int"
+            },
+            {
+              "title": "chainfeed_pubkey",
+              "description": "32-byte Ed25519 public key that CHAINFEED uses to sign quotes. Pin\n the pubkey itself (not just its hash) so verification is self-contained.",
+              "$ref": "#/definitions/ByteArray"
+            },
+            {
+              "title": "max_quote_age_ms",
+              "description": "Maximum quote staleness accepted (in milliseconds). 5 min recommended.",
+              "$ref": "#/definitions/Int"
+            }
+          ]
+        }
+      ]
+    },
+    "stop_loss/Redeemer": {
+      "title": "Redeemer",
+      "anyOf": [
+        {
+          "title": "Redeemer",
+          "dataType": "constructor",
+          "index": 0,
+          "fields": [
+            {
+              "title": "action",
+              "$ref": "#/definitions/stop_loss~1Action"
+            },
+            {
+              "title": "signed",
+              "$ref": "#/definitions/chainfeed~1SignedQuote"
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

@@ -495,6 +495,15 @@ service PriceService {
     borrowAPY        : Decimal(8,6) null;
     lqSupplyAPY      : Decimal(8,6) null;
     apyUpdatedAt     : Timestamp null;
+    // Observed-on-chain APR/APY derived from interestIndex deltas. Null for
+    // the first call per process (no baseline) or when Δt < 60s. Provenance:
+    // verifiable by re-snapshotting the same MarketState UTxO between two
+    // user-controlled timestamps. Trade-off vs `borrowAPY` (GraphQL): more
+    // verifiable, less reactive.
+    observedBorrowAPR    : Decimal(8,6) null;
+    observedBorrowAPY    : Decimal(8,6) null;
+    observedSupplyAPY    : Decimal(8,6) null;
+    observedDeltaMs      : Integer64 null;
     lastInterestUpdateMs : Integer64;
     nextBatchDeadlineMs  : Integer64;
   }

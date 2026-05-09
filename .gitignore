@@ -51,6 +51,5 @@ impl_plan.md
 adr/
 research/
 
-app/
-
 AGENTS.md
+db*

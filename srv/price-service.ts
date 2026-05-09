@@ -35,6 +35,7 @@ import { resolveFluidNetwork } from './lib/fluidtokens-config';
 import liqwid from './adapters/liqwid';
 import { resolveLiqwidNetwork } from './lib/liqwid-config';
 import { totalSuppliedRaw, utilizationFraction, qTokenRate } from './lib/liqwid-decoder';
+import { recordAndDerive, deriveSupplyAPY } from './lib/liqwid-finance';
 import {
   bucketSamples, intervalToMs, maxLookbackMsForInterval, isValidInterval,
   type Interval as OhlcvInterval,
@@ -833,26 +834,43 @@ export = cds.service.impl(async function () {
       computedAt: new Date().toISOString(),
       marketCount: r.markets.length,
       apySource: r.apySourceFailed ? 'unavailable' : 'liqwid-api',
-      perMarket: r.markets.map(m => ({
-        symbol:   m.symbol,
-        liqwidId: m.liqwidId,
-        txHash:   m.txHash,
-        outputIndex: m.outputIndex,
-        decimals: 6,
-        supplyRaw:        m.state.supplyRaw.toString(),
-        principalRaw:     m.state.principalRaw.toString(),
-        reserveRaw:       m.state.reserveRaw.toString(),
-        totalSuppliedRaw: totalSuppliedRaw(m.state).toString(),
-        qTokenSupplyRaw:  m.state.qTokenSupplyRaw.toString(),
-        qTokenRate:       qTokenRate(m.state),
-        utilization:      utilizationFraction(m.state),
-        supplyAPY:    m.apy?.supplyAPY   ?? null,
-        borrowAPY:    m.apy?.borrowAPY   ?? null,
-        lqSupplyAPY:  m.apy?.lqSupplyAPY ?? null,
-        apyUpdatedAt: m.apy?.updatedAt   ?? null,
-        lastInterestUpdateMs: m.state.lastInterestUpdateMs,
-        nextBatchDeadlineMs:  m.state.nextBatchDeadlineMs,
-      })),
+      perMarket: r.markets.map(m => {
+        // Note: the adapter's _fetchAllMarkets already called recordAndDerive
+        // for getPrice. We call again here so the health endpoint also gets
+        // the derivation; module-state is shared, so the second call sees the
+        // same prev-snapshot and may return rates with Δt = 0 since the first
+        // call refreshed the snapshot. Acceptable: the timestamp diff is
+        // sub-millisecond and recordAndDerive returns null for Δt < 60s, so
+        // the health endpoint inherits whatever the adapter already exposed.
+        const derived = recordAndDerive(
+          m.symbol, m.state.interestIndex, m.state.lastInterestUpdateMs,
+        );
+        const util = utilizationFraction(m.state);
+        return {
+          symbol:   m.symbol,
+          liqwidId: m.liqwidId,
+          txHash:   m.txHash,
+          outputIndex: m.outputIndex,
+          decimals: 6,
+          supplyRaw:        m.state.supplyRaw.toString(),
+          principalRaw:     m.state.principalRaw.toString(),
+          reserveRaw:       m.state.reserveRaw.toString(),
+          totalSuppliedRaw: totalSuppliedRaw(m.state).toString(),
+          qTokenSupplyRaw:  m.state.qTokenSupplyRaw.toString(),
+          qTokenRate:       qTokenRate(m.state),
+          utilization:      util,
+          supplyAPY:    m.apy?.supplyAPY   ?? null,
+          borrowAPY:    m.apy?.borrowAPY   ?? null,
+          lqSupplyAPY:  m.apy?.lqSupplyAPY ?? null,
+          apyUpdatedAt: m.apy?.updatedAt   ?? null,
+          observedBorrowAPR: derived?.borrowAPR ?? null,
+          observedBorrowAPY: derived?.borrowAPY ?? null,
+          observedSupplyAPY: derived ? deriveSupplyAPY(derived.borrowAPY, util) : null,
+          observedDeltaMs:   derived?.observedDeltaMs ?? null,
+          lastInterestUpdateMs: m.state.lastInterestUpdateMs,
+          nextBatchDeadlineMs:  m.state.nextBatchDeadlineMs,
+        };
+      }),
       alerts,
     };
   });

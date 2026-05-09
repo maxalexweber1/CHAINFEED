@@ -7,7 +7,7 @@
 >
 > Built as a CAP service on top of [ODATANO](https://github.com/ODATANO/ODATANO).
 
-> 🚧 Hackathon project — under active development.
+> 🚧 Hackathon project. Under active development.
 
 ---
 
@@ -130,6 +130,8 @@ npm run smoke              # all live smokes
 | Paid `/Prices`  | `b03860882b8259561c64c0e2317ca3373be6b4e7ba0c9890df29d51ed7e17001` |
 | Paid `/getBestPrice` | `d56478b6109b902cef5e0629a2e317fbfc478994daf4dcb4d5571288152bffab` |
 | Paid `/getArbitrageOpportunities` | `193146c744014768381ca6473b0793cc40fe9e3fe28adbdee55f144b2fe0b01b` |
+| Aiken stop_loss script funded (5 tADA + datum) | `38219bdf9c3771f5ee0b0e7a2eb5fd072d1d1cdda141d102f13d524eca8296e6` |
+| **Aiken validator consumed CHAINFEED-signed quote on-chain** | `5d7178e9acb63db75f1a40ec466908f066be9a25287f4cf73b2c3e9fc5830b25` |
 
 
 ## License
