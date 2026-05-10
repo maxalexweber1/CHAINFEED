@@ -84,15 +84,12 @@ End-to-end demo (lock + spend on preprod): `scripts/demo-aiken-flow.ts`. Run `np
 
 ```bash
 cd contracts
-aiken check        # run the unit tests (6 currently)
+aiken check        # run the unit tests (17 currently — 7 library + 10 validator)
 aiken build        # produce plutus.json
 ```
 
-Tests cover: signature rejection on tampered bytes, freshness windowing, TTL boundary, and basic verify primitive.
+Library tests cover the verify / is_fresh / not_expired primitives plus a real-signature pin against the off-chain TS encoder. Validator tests exercise the stop_loss spend handler end-to-end via `transaction.placeholder` — both action branches, signer enforcement, signature/freshness/TTL/open-bound abort paths, and missing-datum.
 
-## Versioning
-
-Field order in `ChainfeedQuote` is the canonical signing payload. Any change is a **breaking change** for off-chain producers — signatures over the old layout don't verify against the new layout. Bump version + document migration when updating.
 
 ## License
 

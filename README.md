@@ -64,6 +64,22 @@ Wanchain-bridged USDT/USDC are out of scope (no liquid direct DEX pool today).
 - **FluidTokens v3** — pools, loans, per-asset health, liquidation eligibility (mainnet-only)
 - **Liqwid v2** — stable markets (DJED, iUSD, USDM) with on-chain MarketState reads + GraphQL APY
 
+## On-chain integration (for agents)
+
+Agents act on price on-chain (liquidate, stop-loss, conditional release) by spending from a script that verifies a CHAINFEED-signed quote — Ed25519 over canonical Plutus CBOR, plus freshness + TTL. Reference validator: `contracts/validators/stop_loss.ak` (preprod tx `5d7178e9…`).
+
+Worked example end-to-end:
+
+```bash
+npx tsx scripts/demo-aiken-flow.ts derive          # script addr + datum/redeemer JSON, no chain calls
+npx tsx scripts/demo-aiken-flow.ts lock            # fund 5 tADA into stop_loss
+npx tsx scripts/demo-aiken-flow.ts spend <txHash>  # spend on a fresh signed quote
+```
+
+Programmatic helpers in `srv/lib/aiken-quote-encoder.ts`: `signQuote` (sign), `buildSignedQuotePlutusData` (generic redeemer), `buildStopLossRedeemer` (demo-specific). Submit via ODATANO's `BuildPlutusSpendTransaction`.
+
+Writing your own validator instead of using the reference stop_loss → [`contracts/README.md`](contracts/README.md).
+
 ## Architecture
 
 ```

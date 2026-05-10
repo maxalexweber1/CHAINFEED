@@ -1,6 +1,6 @@
 //// CHAINFEED on-chain consumer library for Aiken validators.
 ////
-//// Allows any Cardano DApp to verify a CHAINFEED-signed price quote on-chain
+//// Allows anyone to verify a CHAINFEED-signed price quote on-chain
 //// and gate spend logic on price + freshness conditions.
 ////
 //// Design notes:
@@ -10,10 +10,10 @@
 ////      sides implement RFC 8949 deterministic CBOR via `serialiseData`.
 ////   2. Signature is plain Ed25519 (64 bytes), the same scheme Cardano
 ////      stake-keys use. CHAINFEED's signing key is published as a hex
-////      pubkey; DApps pin it in their datum so they don't trust an external
+////      pubkey; Consumers pin it in their datum so they don't trust an external
 ////      key registry on-chain.
 ////   3. All timestamps are POSIX milliseconds (matching CHAINFEED's REST
-////      API) — divide by 1000 if you need to compare with `tx.validity_range`
+////      API) - divide by 1000 if you need to compare with `tx.validity_range`
 ////      seconds.
 ////
 //// Usage: `use chainfeed/chainfeed.{verify, is_fresh, not_expired,
@@ -53,9 +53,9 @@ pub type SignedQuote {
 /// public key. Returns `True` iff the signature is valid for the canonical
 /// CBOR encoding of the quote payload.
 ///
-/// `chainfeed_pubkey` is the 32-byte Ed25519 public key (NOT a hash).
+/// `chainfeed_pubkey` is the 32-byte Ed25519 public key.
 /// The off-chain producer publishes both the pubkey and a `keyId` (= the
-/// blake2b-224 hash of the pubkey) — pin the pubkey itself in your datum
+/// blake2b-224 hash of the pubkey). Pin the pubkey itself in your datum
 /// so verification is self-contained.
 pub fn verify(signed: SignedQuote, chainfeed_pubkey: ByteArray) -> Bool {
   let payload_bytes = cbor.serialise(signed.quote)
@@ -83,23 +83,6 @@ pub fn not_expired(signed: SignedQuote, now_ms: Int) -> Bool {
 
 // ── Tests ────────────────────────────────────────────────────────────
 
-/// Cross-check using values captured from a FAILED on-chain spend attempt.
-/// If verify still passes here, the issue is elsewhere (validity range,
-/// signers, etc.) — not the signature.
-test verify_failed_spend_quote() {
-  let q =
-    ChainfeedQuote {
-      pair: #"4144412d555344",
-      price_milli_units: 500_000,
-      valid_until_ms: 1_779_124_871_275,
-      signed_at_ms: 1_779_124_511_403,
-    }
-  let pubkey = #"1a9934096fb709a6541cdb1b47be669c0d2a4428b90533b9794b7398d6707a27"
-  let sig =
-    #"bae60aa2e689965f45ba00db812e9321452cf4ea73d263d7cba35fdbd1f2df554fb6903dd915375a3257e0d2403cb54d69476e671872adbf035b704e38e2a501"
-  verify(SignedQuote { quote: q, signature: sig }, pubkey)
-}
-
 /// Cross-check: verify a real signature produced by the off-chain TS encoder.
 /// Pinned values from `node scripts/debug-aiken-cbor.ts`. If this test
 /// fails, the canonical CBOR encoding has drifted between TS and Aiken
@@ -113,7 +96,8 @@ test verify_accepts_real_ts_signature() {
       valid_until_ms: 1_779_100_600_000,
       signed_at_ms: 1_779_100_000_000,
     }
-  let pubkey = #"1a9934096fb709a6541cdb1b47be669c0d2a4428b90533b9794b7398d6707a27"
+  let pubkey =
+    #"1a9934096fb709a6541cdb1b47be669c0d2a4428b90533b9794b7398d6707a27"
   let sig =
     #"2691345518dd47610c794f12f283b0e023bcab02ce0e05737c6a97d47c86287d6c53e94f5ff672c664e36edf30a54829d642d1413f9f261faab5656a1ea25600"
   verify(SignedQuote { quote: q, signature: sig }, pubkey)
@@ -130,8 +114,10 @@ test verify_rejects_when_signature_corrupt() {
     }
   // 32-byte zero pubkey + 64-byte zero sig — the actual sig over the quote
   // would be 64 nonzero bytes; zero-bytes are guaranteed-invalid.
-  let pubkey = #"0000000000000000000000000000000000000000000000000000000000000000"
-  let sig = #"00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+  let pubkey =
+    #"0000000000000000000000000000000000000000000000000000000000000000"
+  let sig =
+    #"00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
   !verify(SignedQuote { quote: q, signature: sig }, pubkey)
 }
 
