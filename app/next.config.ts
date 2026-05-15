@@ -16,8 +16,20 @@ const config: NextConfig = {
   // the hood) requires opting into asyncWebAssembly to load .wasm imports.
   // The CSL package is dynamically imported in src/lib/cip30.ts so it only
   // shows up on the /demo route bundle, not the public dashboard.
-  webpack: (cfg) => {
+  //
+  // Buffer polyfill for the client bundle: `@odatano/x402`'s client
+  // helpers (`encodePaymentEnvelope`, used internally by `x402Fetch`)
+  // call `Buffer.from(...).toString('base64')`. Node's `Buffer` is not
+  // a browser global — `webpack.ProvidePlugin` injects it from the
+  // `buffer` npm shim wherever the bundle references it.
+  webpack: (cfg, { isServer, webpack }) => {
     cfg.experiments = { ...cfg.experiments, asyncWebAssembly: true, layers: true };
+    if (!isServer) {
+      cfg.plugins = cfg.plugins ?? [];
+      cfg.plugins.push(new webpack.ProvidePlugin({
+        Buffer: ['buffer', 'Buffer'],
+      }));
+    }
     return cfg;
   },
 };

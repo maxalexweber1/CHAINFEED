@@ -26,9 +26,9 @@ entity PriceSources : cuid {
   rawPayload    : LargeString;
 }
 
-// Audit trail for paid x402 reads. Written by `srv/x402/process.ts` and
-// `srv/x402/verify-confirmed.ts` after settlement. NOT a user-facing
-// entity — internal record only.
+// Audit trail for paid x402 reads. Written by the `@odatano/x402` gate's
+// `onAccepted` callback in `srv/price-service.ts` after settlement. NOT a
+// user-facing entity — internal record only.
 entity FeedReads : cuid {
   feedKind          : String(50);
   feedRef           : String(100);
@@ -39,20 +39,21 @@ entity FeedReads : cuid {
   responsePayload   : LargeString;
 }
 
-entity X402PaymentNonces {
-  key txHash       : String(64);
-  claimedAt        : Timestamp;
-  route            : String(200);
-  consumerAddr     : String(120);
-  amountUnits      : String(20);
-  network          : String(20);
-}
+// NOTE: there is no X402PaymentNonces entity. Cardano-x402-v2 replay
+// defence is on-chain — the payment tx consumes a UTxO-ref nonce — so the
+// pre-settle (gateService) flow needs no DB table. The confirmed-payment
+// flow (subscriptions) defends replay via @assert.unique on
+// AlertSubscriptions.paymentTxHash below.
 
 // Webhook subscriptions for peg-break alerts. The worker
 // `srv/workers/peg-monitor.ts` polls active subscriptions every minute,
 // computes current peg-deviation, and fires HMAC-signed webhooks when
 // the deviation crosses the subscriber's threshold (with hysteresis +
 // cooldown — see srv/lib/alert-detector.ts).
+//
+// @assert.unique.paymentTx: a confirmed payment tx redeems exactly one
+// subscription (null paymentTxHash — x402-disabled dev mode — is exempt).
+@assert.unique.paymentTx: [ paymentTxHash ]
 entity AlertSubscriptions : cuid, managed {
   // Cardano address of the consumer who created the subscription.
   // Required for `cancelSubscription` ownership checks; not currently
@@ -73,8 +74,9 @@ entity AlertSubscriptions : cuid, managed {
   lastFiredAt      : Timestamp null;
   lastBpsAtFire    : Decimal(10,2) null;
   fireCount        : Integer default 0;
-  // Optional: x402 payment proof. Today the action records but does not
-  // verify; Sprint 4 ties this into the existing nonces.claim path so
-  // subscribers can be charged for monthly windows on-chain.
+  // x402 payment proof for the subscription window. `subscribePegAlert`
+  // verifies this tx on-chain via `@odatano/x402`'s verifyConfirmedPayment;
+  // the @assert.unique above is the replay defence — v2 has no nonce
+  // table, so a confirmed tx redeems exactly one subscription.
   paymentTxHash    : String(64) null;
 }

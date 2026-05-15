@@ -190,7 +190,8 @@ service PriceService {
   // their hex address, picks which gated endpoint they want to call,
   // and gets back an unsigned tx that pays the right USDM amount to the
   // CHAINFEED receiver. The wallet signs in-browser; the buyer wraps the
-  // signed tx in X-PAYMENT and POSTs the gated endpoint normally.
+  // signed tx + `nonceRef` in a PAYMENT-SIGNATURE envelope and POSTs the
+  // gated endpoint normally.
 
   type UnsignedPaymentTx {
     /** Unsigned tx CBOR (hex). Pass to CIP-30 `signTx(cbor, false)`. */
@@ -199,17 +200,19 @@ service PriceService {
     txHashHex         : String;
     /** Buyer's payment-cred VKey hash — useful for UI to confirm match. */
     requiredSignerHex : String;
-    /** Echo of the requirements the tx satisfies. */
+    /** v2 UTxO-ref nonce `<txHash>#<index>` — goes in the envelope's payload.nonce. */
+    nonceRef          : String;
+    /** Validity-range upper-bound slot baked into the tx. */
+    ttlSlot           : Integer64;
+    /** Echo of the v2 requirements entry the tx satisfies. */
     requirements      : {
-      scheme            : String;
-      network           : String;
-      maxAmountRequired : String;
-      asset             : String;
-      assetNameHex      : String;
-      decimals          : Integer;
-      payTo             : String;
-      resource          : String;
-      description       : String;
+      scheme      : String;
+      network     : String;        // colon-form, e.g. 'cardano:preprod'
+      amount      : String;        // raw asset units
+      asset       : String;        // '<policyId>.<assetNameHex>'
+      payTo       : String;
+      resource    : String;        // the resource.url
+      description : String;
     };
     /** Selected input UTxOs (so the UI can show "spends these"). */
     inputs            : array of {
@@ -223,7 +226,7 @@ service PriceService {
    * Build an unsigned x402 payment tx for `buyerAddrBech32` covering
    * `gatedAction`. Free — the buyer pays for the gated endpoint, not
    * for this builder. `gatedAction` must be one of the gated routes
-   * configured in the x402 middleware (see srv/server.ts).
+   * in `srv/x402-routes.ts` (GATED_ROUTE_PRICING).
    */
   action buildPaymentTx(
     buyerAddrBech32 : String,

@@ -4,8 +4,8 @@
  * Server-side use only — the public dashboard fetches via Next.js RSC,
  * so requests originate from the same network where the CAP server runs.
  * Free endpoints (`getStableHealth`, `getServiceStatus`, `getOhlcv`) skip
- * the x402 flow; paid endpoints would need an `X-PAYMENT` header which
- * lives in a separate flow (see `app/agents` documentation route).
+ * the x402 flow; paid endpoints would need a `PAYMENT-SIGNATURE` header
+ * which lives in a separate flow (see `app/agents` documentation route).
  *
  * Types mirror the CDS shapes in `srv/price-service.cds` 1:1. Decimals
  * come over the wire as JSON strings (CAP convention) — converted to

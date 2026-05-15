@@ -16,8 +16,8 @@ export default function DemoPage() {
           Connect a CIP-30 Cardano wallet (Lace, Eternl, Nami, …), pay 0.01
           mock-USDM on preprod, and unlock a verifiable multi-source ADA-USDM
           quote, all in your browser. Every wire payload (the 402 body, the
-          unsigned tx, the X-PAYMENT envelope, the on-chain tx hash) is
-          exposed below so you can inspect what flows over the network.
+          unsigned tx, the PAYMENT-SIGNATURE envelope, the on-chain tx hash)
+          is exposed below so you can inspect what flows over the network.
         </p>
         <p className="mt-3 text-sm text-(--muted-foreground)">
           Don&apos;t have a CIP-30 wallet?{' '}

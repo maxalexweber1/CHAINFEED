@@ -8,8 +8,9 @@
     "node": ">=20"
   },
   "dependencies": {
-    "@odatano/core": "^1.7.7",
+    "@odatano/core": "^1.7.10",
     "@odatano/watch": "^0.1.8",
+    "@odatano/x402": "^0.3.0",
     "@sap/cds": "^9",
     "express": "^4"
   },

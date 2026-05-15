@@ -53,7 +53,7 @@ All pages are **React Server Components**. Free CHAINFEED endpoints
 during render with `next: { revalidate: 30 }`. Paid endpoints
 (`getAuditPack`, `getBestPrice`, etc.) are described in the UI but never
 called from the dashboard — those are agent-flow paths and require the
-`X-PAYMENT` x402 wire flow which lives in a separate buyer SDK.
+`PAYMENT-SIGNATURE` x402 wire flow which lives in a separate buyer SDK.
 
 The thin SDK at `src/lib/chainfeed-client.ts` mirrors `srv/price-service.cds`
 type shapes. CAP returns decimal-shaped strings; the SDK coerces them to

@@ -63,13 +63,14 @@ export default function DevelopersPage() {
 curl -sL -X POST $URL/getBestPrice \\
   -H 'Content-Type: application/json' \\
   -d '{"pair":"ADA-USDM"}'
-# → { "asset": "<USDM-policy>",
+# → { "asset": "<USDM-policy>.<nameHex>",
 #     "amount": "10000",
 #     "payTo": "addr_test1q…",
-#     "network": "cardano-preprod" }
+#     "network": "cardano:preprod" }
 
-# 2. Buyer builds + signs Cardano tx, base64-wraps it,
-#    re-sends with X-PAYMENT header. Response carries
+# 2. Buyer builds + signs a Cardano tx (with a TTL + a
+#    UTxO-ref nonce), base64-wraps it, re-sends with the
+#    PAYMENT-SIGNATURE header. Response carries
 #    X-PAYMENT-RESPONSE with the on-chain tx hash.`}</code></pre>
         </div>
       </section>
@@ -77,12 +78,16 @@ curl -sL -X POST $URL/getBestPrice \\
       <section className="border border-(--border) rounded-lg p-5">
         <h3 className="font-semibold mb-2">x402 wire compatibility</h3>
         <p className="text-sm text-(--muted-foreground)">
-          CHAINFEED implements x402 in-process. No external facilitator. The
-          402 body shape is wire-compatible with the{' '}
-          <a href="https://github.com/masumi-network/x402-cardano/blob/main/specs/schemes/exact/scheme_exact_cardano.md"
-             className="text-(--accent) hover:underline" target="_blank" rel="noreferrer">Masumi spec</a>.
-          Replay protection at two layers: in-process nonce table (UNIQUE PK
-          on tx hash) plus on-chain double-spend rejection by Cardano itself.
+          CHAINFEED gates paid reads with{' '}
+          <a href="https://www.npmjs.com/package/@odatano/x402"
+             className="text-(--accent) hover:underline" target="_blank" rel="noreferrer">@odatano/x402</a>
+          {' '}— the Cardano-x402-v2 payment library — running in-process. No
+          external facilitator. The 402 body is the canonical v2 shape
+          (<code>x402Version: 2</code>, <code>accepts[]</code>, colon-form
+          network, single <code>&lt;policy&gt;.&lt;nameHex&gt;</code> asset
+          string). Replay defence is on-chain: the buyer references a UTxO in{' '}
+          <code>payload.nonce</code>, that UTxO is an input of the payment tx,
+          and Cardano consumes it on settlement — no server-side nonce table.
         </p>
       </section>
     </div>

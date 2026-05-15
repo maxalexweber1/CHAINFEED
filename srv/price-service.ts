@@ -14,9 +14,10 @@
  * tell a degraded response apart from a verified one. New adapters slot in
  * via `srv/adapters/registry.ts`; this handler does not change.
  *
- * The x402 middleware in `srv/middleware/x402.ts` already verified payment
- * before this handler ran. We trust `req.payment` if set, but do not require
- * it (CAP-internal calls bypass the gating).
+ * x402 payment gating is wired in `init()` below via `@odatano/x402`'s
+ * `gateService(this, …)`. The gate verifies payment before a gated
+ * handler runs and stashes the claim on `req.payment`; handlers trust it
+ * if set but do not require it (CAP-internal calls bypass the gating).
  */
 
 import cds from '@sap/cds';
@@ -24,8 +25,15 @@ import { fanout, sourcesForPair, fanoutDexOnly, dexSourcesForPair, attestationFa
 import { aggregate, pegDeviationBps, twap, type AggregatedResult } from './aggregation';
 import { metadataForPair, metadataForSymbol, STABLE_METADATA } from './lib/stable-metadata';
 import { computeConvergenceMatrix } from './lib/stable-convergence';
-import { buildUnsignedPaymentTx } from './x402/build-unsigned-tx';
-import { buildPaymentRequirements, resolveConfig as resolveX402Config } from './x402/requirements';
+import {
+  gateService,
+  buildPaymentRequirements,
+  flatRequirements,
+  buildUnsignedPaymentTx,
+  verifyConfirmedPayment,
+} from '@odatano/x402';
+import { resolveX402Config } from './x402-config';
+import { GATED_ROUTE_PRICING, priceUnitsForAction, resourcePathForAction } from './x402-routes';
 import { fetchStableSupply } from './lib/stable-supply';
 import { executableDepthForToken } from './lib/liquidity-depth';
 import { computeStableHealth } from './lib/stable-health';
@@ -42,7 +50,7 @@ import {
 } from './lib/ohlcv';
 import { buildAuditPack, type AuditPackQuote, type AuditPackSource } from './lib/audit-pack';
 import { generateHmacSecret, validateWebhookUrl } from './lib/alert-detector';
-import { verifyConfirmedPayment, priceForSubscription, USDM_DECIMALS } from './x402/verify-confirmed';
+import { priceForSubscription, USDM_DECIMALS } from './lib/peg-pricing';
 import type { PriceQuote } from './adapters/types';
 
 const log = cds.log('price-service');
@@ -117,6 +125,47 @@ async function persistResult(
 }
 
 export = cds.service.impl(async function () {
+
+  // ── x402 payment gating ────────────────────────────────────────────
+  // `@odatano/x402`'s CAP gate registers a `before('*')` handler that
+  // 402s any event listed in GATED_ROUTE_PRICING until a valid
+  // PAYMENT-SIGNATURE is presented. Unmapped events (the free
+  // public-dashboard surface, plus subscribePegAlert / buildPaymentTx
+  // which do their own x402 handling) pass through untouched.
+  //
+  // When x402 env is unset (dev mode) we skip the gate entirely — the
+  // service still serves every route for free.
+  const x402 = resolveX402Config();
+  if (x402.enabled) {
+    gateService(this, {
+      payTo:        x402.payTo,
+      network:      x402.network,
+      asset:        x402.asset,
+      routePricing: { ...GATED_ROUTE_PRICING },
+      description:  'CHAINFEED aggregated oracle price (mock-USDM on preprod)',
+      // Audit trail — best-effort, never blocks serving the response.
+      onAccepted: async (claim, req) => {
+        try {
+          await cds.run(
+            INSERT.into('chainfeed.FeedReads').entries({
+              feedKind:        'aggregated',
+              feedRef:         String(claim.resourceUrl ?? req.event ?? '').slice(0, 100),
+              consumerWallet:  String(claim.payerAddr ?? ''),
+              amountPaidUSDM:  Number(claim.amountUnits) / 10 ** x402.usdmDecimals,
+              paymentTxHash:   claim.txHash,
+              servedAt:        new Date().toISOString(),
+              responsePayload: '',
+            }),
+          );
+        } catch (err) {
+          log.warn('FeedReads insert failed (non-fatal):', (err as Error)?.message ?? err);
+        }
+      },
+    });
+    log.info(`x402 gate active on PriceService (network=${x402.network}, payTo=${x402.payTo.slice(0, 16)}…)`);
+  } else {
+    log.warn('x402 disabled: set X402_PAY_TO + X402_USDM_POLICY to enable payment gating.');
+  }
 
   this.on('getArbitrageOpportunities', async (req) => {
     const pair = (req.data as { pair?: string })?.pair;
@@ -200,20 +249,18 @@ export = cds.service.impl(async function () {
     }
 
     // ── x402 payment enforcement ───────────────────────────────────
-    // If the service is configured for x402 (X402_PAY_TO + X402_USDM_*
-    // env), require the buyer to provide a paymentTxHash that's
-    // already-confirmed on-chain and pays ≥ priceForSubscription() to
-    // our wallet. Skip the gate on dev nodes that didn't configure x402
-    // (the existing middleware uses the same env-presence pattern).
-    const x402PayTo      = process.env.X402_PAY_TO;
-    const x402UsdmPolicy = process.env.X402_USDM_POLICY;
-    const x402UsdmName   = process.env.X402_USDM_NAME_HEX;
-    const x402Network    = process.env.X402_NETWORK || 'cardano-preprod';
-    const x402Enabled    = !!(x402PayTo && x402UsdmPolicy);
-    const paymentTxHash  = String(data?.paymentTxHash ?? '').trim();
+    // When x402 is configured, the buyer must present a paymentTxHash
+    // that's already confirmed on-chain and pays ≥ priceForSubscription()
+    // to our wallet. `@odatano/x402`'s v2 verifyConfirmedPayment does NOT
+    // claim a nonce — replay defence for this confirmed-payment flow is
+    // CHAINFEED's job. We enforce it with a uniqueness check on
+    // AlertSubscriptions.paymentTxHash (backed by @assert.unique in
+    // db/schema.cds; the explicit pre-check below gives a clean 402).
+    const x402 = resolveX402Config();
+    const paymentTxHash = String(data?.paymentTxHash ?? '').trim();
 
     let priceUnits: bigint = 0n;
-    if (x402Enabled) {
+    if (x402.enabled) {
       try {
         priceUnits = priceForSubscription(thresholdBps, validUntilHours);
       } catch (err) {
@@ -221,41 +268,56 @@ export = cds.service.impl(async function () {
       }
       if (!paymentTxHash) {
         const usdmCost = Number(priceUnits) / 10 ** USDM_DECIMALS;
-        return req.error(402, `payment required: ${usdmCost.toFixed(6)} USDM (${priceUnits} raw units). Submit a tx paying that amount to ${x402PayTo} of asset ${x402UsdmPolicy}${x402UsdmName ?? ''}, then call subscribePegAlert with paymentTxHash=<your-tx-hash>.`);
+        return req.error(402, `payment required: ${usdmCost.toFixed(6)} USDM (${priceUnits} raw units). Submit a tx paying that amount to ${x402.payTo} of asset ${x402.asset}, then call subscribePegAlert with paymentTxHash=<your-tx-hash>.`);
+      }
+      // Replay defence: this tx must not already back another subscription.
+      const existing = await cds.run(
+        SELECT.one.from(ALERT_SUBSCRIPTIONS).columns('ID').where({ paymentTxHash }),
+      );
+      if (existing) {
+        return req.error(402, `x402: replay_detected — payment tx ${paymentTxHash} has already been redeemed for subscription ${(existing as { ID?: string }).ID}`);
       }
       const verification = await verifyConfirmedPayment({
-        txHash:        paymentTxHash,
-        requiredUnits: priceUnits.toString(),
-        requiredAsset: `${x402UsdmPolicy}${x402UsdmName ?? ''}`,
-        requiredPayTo: x402PayTo!,
-        network:       x402Network,
-        route:         'subscribePegAlert',
-        consumerAddr:  ownerAddr,
+        txHash:         paymentTxHash,
+        requiredAmount: priceUnits.toString(),
+        asset:          x402.asset,
+        payTo:          x402.payTo,
+        network:        x402.network,
       });
       if (!verification.ok) {
         return req.error(402, `x402: ${verification.code} — ${verification.reason}`);
       }
       log.info(`subscribePegAlert: x402 verified — paid=${verification.amountUnits} required=${priceUnits} pair=${pair} owner=${ownerAddr}`);
     } else {
-      log.warn(`subscribePegAlert: x402 disabled (set X402_PAY_TO + X402_USDM_POLICY to enable). Subscription created without payment.`);
+      log.warn('subscribePegAlert: x402 disabled (set X402_PAY_TO + X402_USDM_POLICY to enable). Subscription created without payment.');
     }
 
     const hmacSecretHex = generateHmacSecret();
     const validUntilMs = Date.now() + validUntilHours * 60 * 60 * 1000;
 
-    const inserted = await cds.run(
-      INSERT.into(ALERT_SUBSCRIPTIONS).entries({
-        ownerAddr,
-        pair,
-        thresholdBps,
-        webhookUrl,
-        hmacSecretHex,
-        validUntil:    new Date(validUntilMs).toISOString(),
-        status:        'active',
-        fireCount:     0,
-        paymentTxHash: paymentTxHash || null,
-      }),
-    );
+    let inserted: unknown;
+    try {
+      inserted = await cds.run(
+        INSERT.into(ALERT_SUBSCRIPTIONS).entries({
+          ownerAddr,
+          pair,
+          thresholdBps,
+          webhookUrl,
+          hmacSecretHex,
+          validUntil:    new Date(validUntilMs).toISOString(),
+          status:        'active',
+          fireCount:     0,
+          paymentTxHash: paymentTxHash || null,
+        }),
+      );
+    } catch (err) {
+      // @assert.unique on paymentTxHash — a replay race the pre-check missed.
+      const msg = (err as Error)?.message ?? String(err);
+      if (paymentTxHash && /unique/i.test(msg)) {
+        return req.error(402, `x402: replay_detected — payment tx ${paymentTxHash} has already been redeemed for a subscription`);
+      }
+      throw err;
+    }
     const subscriptionId: string | undefined = Array.isArray(inserted)
       ? (inserted[0] as { ID?: string })?.ID
       : (inserted as { ID?: string })?.ID;
@@ -545,10 +607,10 @@ export = cds.service.impl(async function () {
     if (!buyer)  return req.error(400, 'buyerAddrBech32 is required');
     if (!action) return req.error(400, 'gatedAction is required');
 
-    // Lazy-require the pricing module so the browser-buyer helper has
-    // zero overhead when no consumer is calling it.
-    const { priceUnitsForAction, resourcePathForAction } =
-      require('./x402/pricing') as typeof import('./x402/pricing');
+    const x402 = resolveX402Config();
+    if (!x402.enabled) {
+      return req.error(503, 'x402 not configured (set X402_PAY_TO + X402_USDM_POLICY)');
+    }
 
     let priceUnits: string;
     try {
@@ -557,23 +619,29 @@ export = cds.service.impl(async function () {
       return req.error(400, (err as Error).message);
     }
 
-    // Build the same requirements body the middleware will emit on a
+    // Build the same v2 requirements entry the x402 gate will emit on a
     // 402 — the buyer's signed tx must satisfy this exact shape.
-    let requirementsBody;
+    let requirements;
     try {
-      requirementsBody = buildPaymentRequirements({
-        priceUnits,
-        resource:    resourcePathForAction(action),
-        description: `Browser-buyer payment for ${action}`,
+      const requirementsBody = buildPaymentRequirements({
+        amount:  priceUnits,
+        asset:   x402.asset,
+        payTo:   x402.payTo,
+        network: x402.network,
+        resource: {
+          url:         resourcePathForAction(action),
+          description: `Browser-buyer payment for ${action}`,
+          mimeType:    'application/json',
+        },
       });
+      requirements = flatRequirements(requirementsBody);
     } catch (err) {
       return req.error(503, `x402 misconfigured: ${(err as Error).message}`);
     }
-    const requirements = requirementsBody.accepts[0];
 
     let unsigned;
     try {
-      unsigned = await buildUnsignedPaymentTx(buyer, requirements);
+      unsigned = await buildUnsignedPaymentTx({ buyerBech32: buyer, requirements });
     } catch (err) {
       return req.error(400, (err as Error).message);
     }
@@ -582,16 +650,17 @@ export = cds.service.impl(async function () {
       unsignedTxCborHex: unsigned.unsignedTxCborHex,
       txHashHex:         unsigned.txHashHex,
       requiredSignerHex: unsigned.requiredSignerHex,
+      // v2 UTxO-ref nonce — the browser puts this in payload.nonce.
+      nonceRef:          unsigned.nonceRef,
+      ttlSlot:           unsigned.ttlSlot,
       requirements: {
-        scheme:            requirements.scheme,
-        network:           requirements.network,
-        maxAmountRequired: requirements.maxAmountRequired,
-        asset:             requirements.asset,
-        assetNameHex:      requirements.extra.assetNameHex,
-        decimals:          requirements.extra.decimals,
-        payTo:             requirements.payTo,
-        resource:          requirements.resource,
-        description:       requirements.description,
+        scheme:      requirements.scheme,
+        network:     requirements.network,
+        amount:      requirements.amount,
+        asset:       requirements.asset,
+        payTo:       requirements.payTo,
+        resource:    requirements.resource.url,
+        description: requirements.resource.description,
       },
       inputs: unsigned.inputs,
     };

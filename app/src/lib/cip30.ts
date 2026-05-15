@@ -131,7 +131,7 @@ export async function hexAddressToBech32(addrHex: string): Promise<string> {
 /**
  * Combine an unsigned tx CBOR (from CHAINFEED's `buildPaymentTx`) with
  * a witness-set CBOR (from CIP-30 `signTx`) and return the final signed
- * tx as base64 ready for X-PAYMENT.
+ * tx as base64 ready for the PAYMENT-SIGNATURE envelope.
  */
 export async function combineTxWithWitness(
   unsignedTxCborHex: string,
@@ -167,21 +167,7 @@ export async function combineTxWithWitness(
   };
 }
 
-/**
- * Wrap a base64-CBOR signed tx into the canonical x402 X-PAYMENT header
- * payload. Returns the header value (base64-encoded JSON envelope).
- */
-export function buildXPaymentHeader(args: {
-  network: string;
-  signedTxBase64: string;
-}): string {
-  const envelope = {
-    x402Version: 1,
-    scheme:      'exact',
-    network:     args.network,
-    payload:     { transaction: args.signedTxBase64 },
-  };
-  // btoa works on binary-string; UTF-8-safe JSON encoding via TextEncoder.
-  const utf8 = new TextEncoder().encode(JSON.stringify(envelope));
-  return bytesToBase64(utf8);
-}
+// PAYMENT-SIGNATURE envelope encoding is now handled by
+// `@odatano/x402`'s `encodePaymentEnvelope` (imported by demo-flow.tsx).
+// Buffer is provided as a browser global via webpack.ProvidePlugin in
+// `next.config.ts`.
