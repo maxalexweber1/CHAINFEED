@@ -50,6 +50,7 @@ import {
 } from './lib/ohlcv';
 import { buildAuditPack, type AuditPackQuote, type AuditPackSource } from './lib/audit-pack';
 import { generateHmacSecret, validateWebhookUrl } from './lib/alert-detector';
+import { encryptSecret } from './lib/secret-crypto';
 import { priceForSubscription, USDM_DECIMALS } from './lib/peg-pricing';
 import type { PriceQuote } from './adapters/types';
 
@@ -293,6 +294,10 @@ export = cds.service.impl(async function () {
     }
 
     const hmacSecretHex = generateHmacSecret();
+    // Encrypt at rest. Returns the plaintext unchanged in dev (no KEK
+    // configured); production boot is gated by `assertEncryptionConfigured`
+    // in server.ts so we never reach this line without a key in prod.
+    const storedSecret = encryptSecret(hmacSecretHex);
     const validUntilMs = Date.now() + validUntilHours * 60 * 60 * 1000;
 
     let inserted: unknown;
@@ -303,7 +308,7 @@ export = cds.service.impl(async function () {
           pair,
           thresholdBps,
           webhookUrl,
-          hmacSecretHex,
+          hmacSecretHex: storedSecret,
           validUntil:    new Date(validUntilMs).toISOString(),
           status:        'active',
           fireCount:     0,
@@ -328,7 +333,10 @@ export = cds.service.impl(async function () {
 
     return {
       subscriptionId,
-      hmacSecretHex,    // returned ONCE; consumer must persist immediately
+      // Plaintext secret — returned ONCE; consumer must persist immediately.
+      // Storage is encrypted; this response is the only place the cleartext
+      // is visible after the call.
+      hmacSecretHex,
       pair,
       thresholdBps,
       webhookUrl,
@@ -367,7 +375,10 @@ export = cds.service.impl(async function () {
       return req.error(404, 'subscription not found');
     }
     if (existing[0]!.status !== 'active') {
-      return false;   // already cancelled or expired
+      // Idempotent: already cancelled / expired — treat as success so the
+      // caller doesn't infer "subscription exists but in some other state"
+      // from a `false` return (information leak).
+      return true;
     }
 
     await cds.run(

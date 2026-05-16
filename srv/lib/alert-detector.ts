@@ -7,9 +7,10 @@
  *
  * Hysteresis & cooldown rules (the "don't spam at the boundary" guard):
  *   1. **Threshold cross**: fire only when |currentBps| crosses the
- *      threshold from below. If the alert already fired and the level
- *      stays elevated, no re-fire until the deviation comes BACK below
- *      `threshold × 0.5` (re-arm hysteresis).
+ *      threshold from below. After a fire, no re-fire until the worker
+ *      has observed a sample where `|bps| < threshold × 0.5` — that
+ *      observation flips `armedSinceFire` back to true. The worker
+ *      persists this flag, so a restart doesn't break the gate.
  *   2. **Cooldown**: even on a clean cross, suppress if `lastFiredAt`
  *      is < `MIN_COOLDOWN_MS` (default 15 min) old. Prevents alert
  *      storms when an oracle stutters around the boundary.
@@ -31,6 +32,26 @@ export interface AlertDetectorState {
   thresholdBps:     number;
   lastFiredAt:      number | null;            // epoch ms; null = never fired
   lastBpsAtFire:    number | null;             // signed bps recorded at last fire
+  /**
+   * Re-arm gate. `null` (never fired) and `true` are both "armed" — the
+   * next clean cross can fire. After a fire the worker flips this to
+   * `false` and only flips it back to `true` when it observes a sample
+   * with `|bps| < threshold × REARM_FACTOR`. Without this flag the rearm
+   * comparison degenerates to "lastBpsAtFire ≥ threshold × 0.5", which
+   * is always true by construction (bps ≥ threshold) — so the second
+   * alert would never fire.
+   */
+  armedSinceFire:   boolean | null;
+}
+
+/**
+ * Worker helper: returns whether the supplied sample qualifies as
+ * "re-armed" — i.e. peg returned far enough toward parity to consider
+ * the previous breach resolved. Caller persists the resulting boolean
+ * before invoking `shouldFireAlert` on the next cycle.
+ */
+export function isRearmingSample(thresholdBps: number, currentBps: number): boolean {
+  return Math.abs(currentBps) < thresholdBps * REARM_FACTOR;
 }
 
 export interface AlertDecision {
@@ -61,23 +82,11 @@ export function shouldFireAlert(
     return { fire: false, reason: 'within-cooldown' };
   }
 
-  // Hysteresis: if we already fired and the deviation hasn't come back
-  // below the re-arm level since, treat this as the same event.
-  if (state.lastFiredAt !== null && state.lastBpsAtFire !== null) {
-    const lastAbs = Math.abs(state.lastBpsAtFire);
-    // We're "still in the same alert" if the level never dropped below the
-    // re-arm threshold. Worker tracks a continuous-cross flag separately;
-    // here we use a conservative proxy: if the cooldown has elapsed AND
-    // the deviation is BELOW the re-arm level since last fire, treat the
-    // current sample as a new event. Otherwise it's still the same alert.
-    if (lastAbs >= state.thresholdBps * REARM_FACTOR) {
-      // No clean re-arm window seen — the worker should still log a
-      // "still elevated" telemetry but NOT fire a fresh webhook.
-      // Note: this requires the worker to hand us its in-memory rearm
-      // observation. For now, the cooldown bound (above) is the primary
-      // fire gate; rearming is a supplemental signal.
-      return { fire: false, reason: 'rearming' };
-    }
+  // Hysteresis: if we already fired and the worker hasn't observed a
+  // sample below the re-arm level since, treat this as the same event.
+  // `armedSinceFire === null` means "never fired" (first cross) — go.
+  if (state.lastFiredAt !== null && state.armedSinceFire === false) {
+    return { fire: false, reason: 'rearming' };
   }
 
   return { fire: true, reason: 'threshold-crossed' };

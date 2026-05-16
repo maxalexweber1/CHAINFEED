@@ -160,7 +160,12 @@ function rationalToNumber(numStr: string, denomStr: string): number {
 async function getPrice(pair: string, opts: GetPriceOpts = {}): Promise<PriceQuote> {
   const network = opts.network ?? resolveNetwork();
   const netCfg  = NETWORK_CONFIG[network];
-  if (!netCfg) throw new Error(`orcfax: unsupported network '${network}'`);
+  if (!netCfg) {
+    // Surface explicitly. Without this throw, a missing/typo'd network env on
+    // a mainnet deploy could silently fall through to whichever entry the
+    // resolver defaults to (see `resolveNetwork`).
+    throw new Error(`orcfax: unsupported network '${network}' — set ORCFAX_NETWORK or NETWORK to one of ${Object.keys(NETWORK_CONFIG).join(', ')}`);
+  }
 
   const feedCfg = FEED_CONFIG[pair];
   if (!feedCfg) throw new Error(`orcfax: pair '${pair}' is not configured`);

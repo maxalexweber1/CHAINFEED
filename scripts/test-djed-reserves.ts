@@ -169,9 +169,9 @@ async function main() {
   });
 
   await t('SHEN asset-info failure → equityPerShenUsd is null, rest unchanged', async () => {
-    bridge.getUtxosAtAddress = async () => [mockUtxo(36_000_000_000_000n)];
+    bridge.getUtxosAtAddress = async () => [mockUtxo(36_000_000_000_000n, 1n)];
     assetInfoMap = new Map<string, unknown | Error>([
-      [DJED_ASSET_UNIT.toLowerCase(), { totalSupply: '3000000000000' }],
+      [DJED_ASSET_UNIT.toLowerCase(), { totalSupply: '3000000000001' }],
       [SHEN_ASSET_UNIT.toLowerCase(), new Error('shen-asset-not-indexed')],
     ]);
     responses = new Map<string, FetchResponseStub | Error>([
@@ -187,9 +187,9 @@ async function main() {
   });
 
   await t('healthy bucket at 1000% coverage', async () => {
-    bridge.getUtxosAtAddress = async () => [mockUtxo(100_000_000_000_000n)];  // 100M ADA
+    bridge.getUtxosAtAddress = async () => [mockUtxo(100_000_000_000_000n, 1n)];  // 100M ADA, trace DJED
     assetInfoMap = new Map<string, unknown | Error>([
-      [DJED_ASSET_UNIT.toLowerCase(), { totalSupply: '3000000000000' }],
+      [DJED_ASSET_UNIT.toLowerCase(), { totalSupply: '3000000000001' }],
       [SHEN_ASSET_UNIT.toLowerCase(), { totalSupply: '600000000000' }],
     ]);
     responses = new Map([
@@ -202,9 +202,11 @@ async function main() {
   });
 
   await t('warning bucket at 500% coverage (between 400 and 800)', async () => {
-    bridge.getUtxosAtAddress = async () => [mockUtxo(50_000_000_000_000n)];  // 50M ADA
+    // Reserve UTxO carries token inventory — required by the inventory filter
+    // (else the ADA wouldn't be counted as reserves). 1 raw unit is enough.
+    bridge.getUtxosAtAddress = async () => [mockUtxo(50_000_000_000_000n, 1n)];  // 50M ADA, trace DJED
     assetInfoMap = new Map<string, unknown | Error>([
-      [DJED_ASSET_UNIT.toLowerCase(), { totalSupply: '3000000000000' }],
+      [DJED_ASSET_UNIT.toLowerCase(), { totalSupply: '3000000000001' }],   // +1 to absorb the trace inventory
       [SHEN_ASSET_UNIT.toLowerCase(), { totalSupply: '600000000000' }],
     ]);
     responses = new Map([
@@ -217,9 +219,9 @@ async function main() {
   });
 
   await t('critical bucket at 90% coverage (depeg territory)', async () => {
-    bridge.getUtxosAtAddress = async () => [mockUtxo(9_000_000_000_000n)];   // 9M ADA
+    bridge.getUtxosAtAddress = async () => [mockUtxo(9_000_000_000_000n, 1n)];   // 9M ADA, trace DJED
     assetInfoMap = new Map<string, unknown | Error>([
-      [DJED_ASSET_UNIT.toLowerCase(), { totalSupply: '3000000000000' }],
+      [DJED_ASSET_UNIT.toLowerCase(), { totalSupply: '3000000000001' }],
       [SHEN_ASSET_UNIT.toLowerCase(), { totalSupply: '600000000000' }],
     ]);
     responses = new Map([
@@ -241,7 +243,7 @@ async function main() {
   });
 
   await t('rejects when bridge returns no totalSupply for DJED', async () => {
-    bridge.getUtxosAtAddress = async () => [mockUtxo(36_000_000_000_000n)];
+    bridge.getUtxosAtAddress = async () => [mockUtxo(36_000_000_000_000n, 1n)];
     assetInfoMap = new Map<string, unknown | Error>([
       [DJED_ASSET_UNIT.toLowerCase(), {}],   // no totalSupply
       [SHEN_ASSET_UNIT.toLowerCase(), { totalSupply: '600000000000' }],
@@ -253,9 +255,9 @@ async function main() {
   });
 
   await t('rejects when ADA-USD reference is missing/zero', async () => {
-    bridge.getUtxosAtAddress = async () => [mockUtxo(36_000_000_000_000n)];
+    bridge.getUtxosAtAddress = async () => [mockUtxo(36_000_000_000_000n, 1n)];
     assetInfoMap = new Map<string, unknown | Error>([
-      [DJED_ASSET_UNIT.toLowerCase(), { totalSupply: '3000000000000' }],
+      [DJED_ASSET_UNIT.toLowerCase(), { totalSupply: '3000000000001' }],
       [SHEN_ASSET_UNIT.toLowerCase(), { totalSupply: '600000000000' }],
     ]);
     responses = new Map([
@@ -265,7 +267,7 @@ async function main() {
   });
 
   await t('propagates bridge.getAssetInfo errors for DJED', async () => {
-    bridge.getUtxosAtAddress = async () => [mockUtxo(36_000_000_000_000n)];
+    bridge.getUtxosAtAddress = async () => [mockUtxo(36_000_000_000_000n, 1n)];
     assetInfoMap = new Map<string, unknown | Error>([
       [DJED_ASSET_UNIT.toLowerCase(), new Error('odatano-backend-503')],
       [SHEN_ASSET_UNIT.toLowerCase(), { totalSupply: '600000000000' }],
@@ -274,6 +276,24 @@ async function main() {
       [ADA_PRICE_URL, jsonResponse({ value: { price: 0.247 } })],
     ]);
     await assert.rejects(() => djed.getPrice('DJED-RESERVES'), /odatano-backend-503/);
+  });
+
+  await t('rejects when reserve UTxOs carry no DJED/SHEN inventory (script retired/wrong address)', async () => {
+    // UTxOs exist at the address but none carry DJED or SHEN — i.e. the address
+    // hosts unrelated value or has been emptied. Pre-fix this would silently
+    // sum the lovelace and over-state coverage.
+    bridge.getUtxosAtAddress = async () => [mockUtxo(50_000_000_000_000n)];   // no inventory
+    assetInfoMap = new Map<string, unknown | Error>([
+      [DJED_ASSET_UNIT.toLowerCase(), { totalSupply: '3000000000000' }],
+      [SHEN_ASSET_UNIT.toLowerCase(), { totalSupply: '600000000000' }],
+    ]);
+    responses = new Map([
+      [ADA_PRICE_URL, jsonResponse({ value: { price: 0.30 } })],
+    ]);
+    await assert.rejects(
+      () => djed.getPrice('DJED-RESERVES'),
+      /no UTxOs at .* carry DJED\/SHEN inventory/,
+    );
   });
 
   await t('supportsPair: only DJED-RESERVES, nothing else', async () => {

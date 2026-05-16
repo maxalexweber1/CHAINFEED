@@ -36,10 +36,16 @@ TX_BUILDERS=buildooor
 BLOCKFROST_API_KEY=preprod_<YOUR_KEY>
 
 # x402
-X402_NETWORK=cardano-preprod
+X402_NETWORK=cardano:preprod
 X402_USDM_NAME_HEX=0014df105553444d
 # X402_USDM_POLICY filled in by mint-mock-usdm.ts
 # X402_PAY_TO filled in by gen-wallet.ts
+
+# Peg-alert webhook secret encryption key (AES-256-GCM, 32 bytes / 64 hex).
+# Without this, the server stores webhook HMAC secrets in cleartext in dev
+# and refuses to boot in production. Generate with:
+#   node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+CHAINFEED_SUBSCRIPTION_KEK_HEX=
 
 ```
 

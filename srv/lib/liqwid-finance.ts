@@ -87,13 +87,21 @@ export function recordAndDerive(
     return null;
   }
 
-  // Update to the new on-chain checkpoint.
-  snapshots.set(key, { interestIndex, lastInterestUpdateMs });
+  if (!prev) {
+    // First observation — store the baseline; no derivation possible yet.
+    snapshots.set(key, { interestIndex, lastInterestUpdateMs });
+    return null;
+  }
 
-  if (!prev) return null;
   const dt = lastInterestUpdateMs - prev.lastInterestUpdateMs;
   if (dt < MIN_DELTA_MS) return null;
+  // Reject reorgs / regressions BEFORE replacing the baseline — otherwise a
+  // chain re-org checkpoint would overwrite a perfectly good prev and we'd
+  // lose the working baseline for the next poll.
   if (interestIndex <= prev.interestIndex) return null;
+
+  // Validation passed; commit the new checkpoint.
+  snapshots.set(key, { interestIndex, lastInterestUpdateMs });
 
   // Use Number for the ratio — interestIndex magnitudes are ~10^16 in
   // observed data, well inside Float64 safe range. The relative growth is

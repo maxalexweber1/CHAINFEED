@@ -19,20 +19,32 @@
  */
 
 import cds from '@sap/cds';
+import { randomUUID } from 'node:crypto';
 import {
-  shouldFireAlert, signWebhook,
+  shouldFireAlert, signWebhook, isRearmingSample,
   HMAC_SIGNATURE_HEADER, HMAC_TIMESTAMP_HEADER, ALERT_PAYLOAD_VERSION,
   type AlertWebhookPayload,
 } from '../lib/alert-detector';
+import { decryptSecret } from '../lib/secret-crypto';
 import { fanout } from '../adapters/registry';
 import { aggregate, pegDeviationBps } from '../aggregation';
 import { metadataForPair } from '../lib/stable-metadata';
 
 const ALERT_SUBSCRIPTIONS = 'chainfeed.AlertSubscriptions';
+const WORKER_LEASES       = 'chainfeed.WorkerLeases';
+const LEASE_NAME          = 'peg-monitor';
 
 const POLL_INTERVAL_MS    = 60_000;     // every minute
 const WEBHOOK_TIMEOUT_MS  = 10_000;
 const SHUTDOWN_GRACE_MS   = 5_000;
+// Lease TTL is 2× the poll interval so a single missed cycle (slow fanout,
+// brief GC pause) doesn't yield the lease. Worker renews on every cycle.
+const LEASE_TTL_MS        = 2 * POLL_INTERVAL_MS;
+
+// Per-process identity. Used as the CAS guard on lease renewals so we can
+// distinguish "we still hold it" from "another worker grabbed it after our
+// last renewal expired".
+const workerId = randomUUID();
 
 const log = cds.log('peg-monitor');
 
@@ -42,11 +54,14 @@ interface SubscriptionRow {
   pair:           string;
   thresholdBps:   number;
   webhookUrl:     string;
+  /** Encrypted envelope OR legacy plaintext hex — decrypt via `decryptSecret`. */
   hmacSecretHex:  string;
   validUntil:     string;
   status:         string;
   lastFiredAt:    string | null;
   lastBpsAtFire:  number | null;
+  /** SQLite stores Boolean as 0/1; CDS read returns boolean. Null = "never fired". */
+  armedSinceFire: boolean | number | null;
   fireCount:      number;
 }
 
@@ -75,7 +90,14 @@ async function pegDeviationForPair(pair: string): Promise<{
   } catch { return null; }
 }
 
-async function fireWebhook(sub: SubscriptionRow, bps: number, price: number, confidence: number): Promise<void> {
+/**
+ * Returns `true` iff the recipient acknowledged delivery (HTTP 2xx). On 4xx,
+ * 5xx, network failure, or timeout returns `false` — caller leaves cooldown
+ * fields unchanged so the breach is retried on the next poll cycle. Without
+ * this gate, a recipient hiccup would record the alert as fired-and-cooled
+ * and silently drop the breach.
+ */
+async function fireWebhook(sub: SubscriptionRow, bps: number, price: number, confidence: number): Promise<boolean> {
   const payload: AlertWebhookPayload = {
     version:               ALERT_PAYLOAD_VERSION,
     subscriptionId:        sub.ID,
@@ -88,7 +110,10 @@ async function fireWebhook(sub: SubscriptionRow, bps: number, price: number, con
     detectedAt:            new Date().toISOString(),
     serviceUrl:            process.env.CHAINFEED_PUBLIC_URL ?? 'unknown',
   };
-  const { body, timestamp, signatureHex } = signWebhook(sub.hmacSecretHex, payload);
+  // Decrypt at the latest possible moment; secret stays in memory only for
+  // the lifetime of this signWebhook call.
+  const plainSecret = decryptSecret(sub.hmacSecretHex);
+  const { body, timestamp, signatureHex } = signWebhook(plainSecret, payload);
 
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), WEBHOOK_TIMEOUT_MS);
@@ -104,12 +129,14 @@ async function fireWebhook(sub: SubscriptionRow, bps: number, price: number, con
       signal: ac.signal,
     });
     if (!res.ok) {
-      log.warn(`webhook ${sub.ID} → ${sub.webhookUrl}: HTTP ${res.status}`);
-    } else {
-      log.info(`webhook ${sub.ID} → ${sub.webhookUrl}: 2xx (bps=${bps.toFixed(2)})`);
+      log.warn(`webhook ${sub.ID} → ${sub.webhookUrl}: HTTP ${res.status} — will retry next cycle`);
+      return false;
     }
+    log.info(`webhook ${sub.ID} → ${sub.webhookUrl}: 2xx (bps=${bps.toFixed(2)})`);
+    return true;
   } catch (err) {
-    log.warn(`webhook ${sub.ID} → ${sub.webhookUrl}: ${(err as Error)?.message ?? err}`);
+    log.warn(`webhook ${sub.ID} → ${sub.webhookUrl}: ${(err as Error)?.message ?? err} — will retry next cycle`);
+    return false;
   } finally {
     clearTimeout(timer);
   }
@@ -157,27 +184,57 @@ async function pollOnce(): Promise<void> {
         continue;
       }
 
+      // Promote a stored 0/1 (SQLite Boolean column) or string to a clean
+      // tri-state: true | false | null.
+      const armed: boolean | null =
+        sub.armedSinceFire === null || sub.armedSinceFire === undefined
+          ? null
+          : !!sub.armedSinceFire;
+
+      // Rearm observation: if this sample is below threshold × 0.5 AND
+      // the subscription previously fired, flip the gate back to armed.
+      // Persist the flip immediately so a worker crash mid-cycle doesn't
+      // lose the rearm.
+      if (armed === false && isRearmingSample(sub.thresholdBps, dev.bps)) {
+        await cds.run(
+          UPDATE(ALERT_SUBSCRIPTIONS)
+            .set({ armedSinceFire: true })
+            .where({ ID: sub.ID }),
+        );
+        sub.armedSinceFire = true;
+      }
+
       const decision = shouldFireAlert(
         {
-          thresholdBps:  sub.thresholdBps,
-          lastFiredAt:   sub.lastFiredAt ? new Date(sub.lastFiredAt).getTime() : null,
-          lastBpsAtFire: sub.lastBpsAtFire,
+          thresholdBps:   sub.thresholdBps,
+          lastFiredAt:    sub.lastFiredAt ? new Date(sub.lastFiredAt).getTime() : null,
+          lastBpsAtFire:  sub.lastBpsAtFire,
+          armedSinceFire:
+            sub.armedSinceFire === null || sub.armedSinceFire === undefined
+              ? null : !!sub.armedSinceFire,
         },
         dev.bps,
         now,
       );
 
       if (decision.fire) {
-        await fireWebhook(sub, dev.bps, dev.price, dev.confidence);
-        await cds.run(
-          UPDATE(ALERT_SUBSCRIPTIONS)
-            .set({
-              lastFiredAt:   new Date(now).toISOString(),
-              lastBpsAtFire: dev.bps,
-              fireCount:     (sub.fireCount ?? 0) + 1,
-            })
-            .where({ ID: sub.ID }),
-        );
+        const delivered = await fireWebhook(sub, dev.bps, dev.price, dev.confidence);
+        if (delivered) {
+          // Anchor cooldown to the actual fire time so a slow `fireWebhook`
+          // doesn't shrink the window. 5xx/network errors return `false`
+          // and leave `lastFiredAt` untouched — the breach is retried on
+          // the next poll instead of silently dropped.
+          await cds.run(
+            UPDATE(ALERT_SUBSCRIPTIONS)
+              .set({
+                lastFiredAt:    new Date(Date.now()).toISOString(),
+                lastBpsAtFire:  dev.bps,
+                armedSinceFire: false,
+                fireCount:      (sub.fireCount ?? 0) + 1,
+              })
+              .where({ ID: sub.ID }),
+          );
+        }
       }
     }
   }
@@ -192,10 +249,81 @@ async function pollOnce(): Promise<void> {
   }
 }
 
+/**
+ * Try to acquire (or renew) the worker lease. Returns true when this
+ * process owns the lease and may proceed with a poll cycle; false when
+ * another worker holds it and is still within its TTL.
+ *
+ * Not strictly atomic — between the SELECT and the UPDATE another worker
+ * could observe the same state. The CAS guard `WHERE leaseHolder = <observed>`
+ * narrows the window to "the lease was last seen as held by X and is
+ * still held by X". For two operators-started-two-workers (the realistic
+ * failure mode) this is sufficient; both workers converge to whichever
+ * INSERT/UPDATE wins.
+ */
+async function acquireOrRenewLease(): Promise<boolean> {
+  const now = Date.now();
+  const leaseUntilIso = new Date(now + LEASE_TTL_MS).toISOString();
+
+  const existing = await cds.run(
+    SELECT.one.from(WORKER_LEASES).where({ name: LEASE_NAME }),
+  ) as { leaseHolder: string; leaseUntil: string } | null | undefined;
+
+  if (!existing) {
+    // No row yet — first worker. INSERT may race with a sibling worker;
+    // the loser falls through to the UPDATE path on the next call.
+    try {
+      await cds.run(INSERT.into(WORKER_LEASES).entries({
+        name: LEASE_NAME, leaseHolder: workerId, leaseUntil: leaseUntilIso,
+      }));
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  const heldByUs       = existing.leaseHolder === workerId;
+  const leaseExpiredMs = new Date(existing.leaseUntil).getTime();
+  const expired        = Number.isFinite(leaseExpiredMs) && leaseExpiredMs < now;
+  if (!heldByUs && !expired) return false;
+
+  // CAS: only update if the holder hasn't changed since we read it.
+  const affected = await cds.run(
+    UPDATE(WORKER_LEASES)
+      .set({ leaseHolder: workerId, leaseUntil: leaseUntilIso })
+      .where({ name: LEASE_NAME, leaseHolder: existing.leaseHolder }),
+  );
+  return Number(affected ?? 0) > 0;
+}
+
+/**
+ * Release the lease on clean shutdown. Best-effort — if the write fails
+ * we'd otherwise wait LEASE_TTL_MS before another worker could take over.
+ * On crash (no clean shutdown) the lease is reclaimed naturally via TTL.
+ */
+async function releaseLease(): Promise<void> {
+  try {
+    await cds.run(
+      UPDATE(WORKER_LEASES)
+        .set({ leaseUntil: new Date(0).toISOString() })
+        .where({ name: LEASE_NAME, leaseHolder: workerId }),
+    );
+  } catch (err) {
+    log.warn(`releaseLease failed (next worker waits up to ${LEASE_TTL_MS}ms):`, (err as Error)?.message ?? err);
+  }
+}
+
 let stopping = false;
 async function loop() {
   while (!stopping) {
-    try { await pollOnce(); }
+    try {
+      const owned = await acquireOrRenewLease();
+      if (!owned) {
+        log.info(`peg-monitor: lease held by another worker — sleeping ${POLL_INTERVAL_MS / 1000}s`);
+      } else {
+        await pollOnce();
+      }
+    }
     catch (err) { log.error('poll cycle failed:', (err as Error)?.stack ?? err); }
     if (stopping) break;
     await new Promise<void>(r => setTimeout(r, POLL_INTERVAL_MS));
@@ -212,6 +340,7 @@ async function main() {
   process.on('SIGINT',  stop);
   process.on('SIGTERM', stop);
   await loop();
+  await releaseLease();
   await new Promise<void>(r => setTimeout(r, SHUTDOWN_GRACE_MS));
   log.info('peg-monitor stopped');
   process.exit(0);
@@ -225,4 +354,4 @@ if (require.main === module) {
 }
 
 // Exported for tests
-export { pollOnce, pegDeviationForPair, fireWebhook };
+export { pollOnce, pegDeviationForPair, fireWebhook, acquireOrRenewLease, releaseLease };

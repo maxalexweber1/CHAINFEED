@@ -68,6 +68,22 @@ function parseDateFromUrl(url: string): number | null {
   return Date.UTC(year, monthIdx, lastDay, 23, 59, 59);
 }
 
+/**
+ * Hard-fail variant used at quote-emission time. If the URL doesn't carry a
+ * parseable date we'd otherwise stamp the AttestationQuote with `fetchedAt`,
+ * which lies to the risk-score's freshness signal (a months-old PDF reads
+ * fresh). Better to fail the adapter loudly so the source is marked degraded.
+ */
+function requireAttestationDate(url: string): number {
+  const ts = parseDateFromUrl(url);
+  if (ts !== null) return ts;
+  throw new Error(
+    `circle-usdc-attestation: could not parse attestation date from URL '${url}'. ` +
+    `URL must match Circle's pattern ".../{YEAR}/{YEAR} USDC_Examination Report {Month} {YY}.pdf". ` +
+    `Refusing to emit a quote stamped with fetchedAt — it would lie about freshness.`,
+  );
+}
+
 async function discoverLatestUrl(timeoutMs = 5_000): Promise<string | null> {
   try {
     const res = await fetch(TRANSPARENCY_INDEX_URL, { signal: AbortSignal.timeout(timeoutMs) });
@@ -150,7 +166,9 @@ async function getPrice(pair: string): Promise<AttestationQuote> {
   // Timestamp for the AttestationQuote = end of the attested month, NOT the
   // fetch time. Stable-health computes ageMs from this — and for a monthly
   // attestation, age-since-publication is what the freshness signal needs.
-  const ts = report.attestationDateMs ?? report.fetchedAt;
+  // Falling back to fetchedAt would lie to freshness scoring (months-old
+  // PDFs would read as fresh). Throw instead so the source surfaces as failed.
+  const ts = report.attestationDateMs ?? requireAttestationDate(report.url);
 
   return {
     kind: 'attestation',

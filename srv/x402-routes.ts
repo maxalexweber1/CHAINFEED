@@ -55,6 +55,14 @@ export function priceUnitsForAction(action: string): string {
  * Build the resource URL the way the x402 gate sees it. Used by the
  * browser-buyer helper so the requirements `resource.url` matches what
  * the gate emits on the eventual paid call.
+ *
+ * **Path vs URL caveat.** Without `baseUrl` this returns the relative
+ * path (`/odata/v4/price/<action>`). `gateService` defaults to the
+ * request's full HTTP URL (see `@odatano/x402` `cap.d.ts:resourceUrl`).
+ * Our own browser flow doesn't validate `requirements.resource.url`, so
+ * the mismatch is harmless today; if a third-party x402 client starts
+ * comparing the `buildPaymentTx` preview against the 402's `resource.url`,
+ * pass the public base URL here so both shapes match.
  */
 export function resourcePathForAction(action: string, baseUrl?: string): string {
   const path = `/odata/v4/price/${action}`;

@@ -66,14 +66,23 @@ pub fn verify(signed: SignedQuote, chainfeed_pubkey: ByteArray) -> Bool {
   )
 }
 
-/// Returns `True` if the quote was signed at most `max_age_ms` before `now_ms`.
-/// Typical `max_age_ms` for stale-tolerant DApps: `5 * 60 * 1000` (5 min).
+/// Returns `True` if the quote was signed at most `max_age_ms` before `now_ms`,
+/// AND was not signed in the future. Typical `max_age_ms` for stale-tolerant
+/// DApps: `5 * 60 * 1000` (5 min).
 ///
 /// Caller derives `now_ms` from `tx.validity_range`. Conservative pattern:
 /// use the upper bound (latest possible tx time) so freshness checks are
 /// safe against time-skew attacks.
+///
+/// **Future-quote defence:** the `signed_at_ms <= now_ms` lower bound stops
+/// a leaked CHAINFEED signing key from being used to pre-sign quotes for
+/// arbitrary future timestamps. Without it, `now_ms - signed_at_ms` goes
+/// negative and the `<= max_age_ms` check passes trivially.
 pub fn is_fresh(signed: SignedQuote, now_ms: Int, max_age_ms: Int) -> Bool {
-  now_ms - signed.quote.signed_at_ms <= max_age_ms
+  and {
+    signed.quote.signed_at_ms <= now_ms,
+    now_ms - signed.quote.signed_at_ms <= max_age_ms,
+  }
 }
 
 /// Returns `True` if the quote's TTL hasn't passed yet (`now_ms <= valid_until_ms`).
@@ -143,6 +152,20 @@ test is_fresh_outside_window() {
     }
   let signed = SignedQuote { quote: q, signature: #"" }
   !is_fresh(signed, 1_002_000, 1_000)
+}
+
+test is_fresh_rejects_future_signed_at() {
+  let q =
+    ChainfeedQuote {
+      pair: #"",
+      price_milli_units: 0,
+      valid_until_ms: 0,
+      // Signed 1 year in the future — leaked-key pre-sign scenario.
+      signed_at_ms: 1_000_000 + 365 * 24 * 60 * 60 * 1_000,
+    }
+  let signed = SignedQuote { quote: q, signature: #"" }
+  // Even with an enormous max_age, future-dated quotes must be rejected.
+  !is_fresh(signed, 1_000_000, 10 * 365 * 24 * 60 * 60 * 1_000)
 }
 
 test not_expired_before_ttl() {

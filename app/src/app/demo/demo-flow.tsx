@@ -6,11 +6,17 @@ import {
   combineTxWithWitness,
   type Cip30Api, type WalletInfo,
 } from '@/lib/cip30';
-import { x402Fetch } from '@odatano/x402/srv/client/fetch';
-import { encodePaymentEnvelope } from '@odatano/x402/srv/client/envelope';
-import type { PayHandler } from '@odatano/x402/srv/client/types';
-import type { Network } from '@odatano/x402/srv/core/network';
+import {
+  x402Fetch, encodePaymentEnvelope,
+  type PayHandler, type Network,
+} from '@odatano/x402';
 
+/**
+ * Mirror of the CDS `UnsignedPaymentTx` action return shape
+ * (srv/price-service.cds → buildPaymentTx). The frontend has no
+ * auto-generated CDS types, so this is duplicated; if a field is added
+ * on the server, mirror it here.
+ */
 interface UnsignedPaymentTx {
   unsignedTxCborHex: string;
   txHashHex:         string;
@@ -28,6 +34,19 @@ interface UnsignedPaymentTx {
     description: string;
   };
   inputs: Array<{ txHash: string; outputIndex: number; lovelace: string }>;
+}
+
+/**
+ * Cardano network-id mapping. CIP-30 wallets return 0 (testnet — preview &
+ * preprod share this) or 1 (mainnet). The server emits the network as a
+ * v2 colon-form string; we compare so a buyer doesn't sign a preprod tx
+ * with their mainnet wallet (and vice versa) only to have the wallet
+ * silently fail to enumerate UTxOs.
+ */
+function expectedNetworkId(serverNetwork: string): 0 | 1 | null {
+  if (serverNetwork === 'cardano:mainnet') return 1;
+  if (serverNetwork === 'cardano:preprod' || serverNetwork === 'cardano:preview') return 0;
+  return null;
 }
 
 type StepStatus = 'idle' | 'busy' | 'done' | 'error';
@@ -133,6 +152,21 @@ export function DemoFlow() {
         throw new Error(`buildPaymentTx HTTP ${r.status}: ${text.slice(0, 200)}`);
       }
       const u = (await r.json()) as UnsignedPaymentTx;
+
+      // Wallet-network match check. Surfaces the wrong-wallet-network
+      // error here (where the diagnostic is clean) instead of later when
+      // the wallet silently can't enumerate UTxOs to spend.
+      const expected = expectedNetworkId(u.requirements.network);
+      if (expected !== null) {
+        const walletNetId = await api.getNetworkId();
+        if (walletNetId !== expected) {
+          throw new Error(
+            `Wallet is on network id ${walletNetId} but the server requires ` +
+            `${u.requirements.network} (network id ${expected}). Switch wallet network and reconnect.`,
+          );
+        }
+      }
+
       setUnsigned(u);
       const usdm = (Number(u.requirements.amount) / 10 ** USDM_DECIMALS).toFixed(USDM_DECIMALS);
       setStep2({

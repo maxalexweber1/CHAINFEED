@@ -41,20 +41,43 @@ export interface SignedResponse<T> {
 /**
  * Stable JSON canonicalization for signing. Object keys sorted
  * alphabetically (recursive). Arrays preserve order. No whitespace
- * variability. Numbers serialized via JSON's default — callers
- * shouldn't put `NaN` or `Infinity` in payloads they intend to sign
- * (those would `null`-ify and silently change semantics).
+ * variability.
+ *
+ * **Rejected types** — these throw rather than silently coerce, because
+ * each one would produce a valid-but-meaningless signed payload:
+ *   - `Date` instances stringify to `{}` (no `toJSON` invocation here).
+ *   - `BigInt` throws inside `JSON.stringify` (Node default) AFTER
+ *     `sortKeys` runs — and the error message is opaque. We throw earlier
+ *     with a useful one.
+ *   - `NaN` / `Infinity` / `-Infinity` would coerce to JSON `null` and
+ *     silently change semantics.
+ *
+ * Callers must pre-serialise Dates to ISO strings and BigInts to base-10
+ * strings (CHAINFEED's CDS Decimal columns already arrive as strings).
  */
 export function canonicalizeJson(value: unknown): string {
   return JSON.stringify(sortKeys(value));
 }
 
-function sortKeys(v: unknown): unknown {
+function rejectUnserialisable(v: unknown, path: string): void {
+  if (typeof v === 'number' && !Number.isFinite(v)) {
+    throw new TypeError(`canonicalizeJson: ${path} is ${v} (NaN/Infinity not signable)`);
+  }
+  if (typeof v === 'bigint') {
+    throw new TypeError(`canonicalizeJson: ${path} is a BigInt — convert to string before signing`);
+  }
+  if (v instanceof Date) {
+    throw new TypeError(`canonicalizeJson: ${path} is a Date — convert to ISO string before signing`);
+  }
+}
+
+function sortKeys(v: unknown, path = '$'): unknown {
+  rejectUnserialisable(v, path);
   if (v === null || typeof v !== 'object') return v;
-  if (Array.isArray(v)) return v.map(sortKeys);
+  if (Array.isArray(v)) return v.map((item, i) => sortKeys(item, `${path}[${i}]`));
   const out: Record<string, unknown> = {};
   for (const k of Object.keys(v as Record<string, unknown>).sort()) {
-    out[k] = sortKeys((v as Record<string, unknown>)[k]);
+    out[k] = sortKeys((v as Record<string, unknown>)[k], `${path}.${k}`);
   }
   return out;
 }

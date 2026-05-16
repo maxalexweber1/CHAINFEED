@@ -100,16 +100,38 @@ async function getPrice(pair: string): Promise<AttestationQuote> {
     throw new Error(`djed-reserves: no UTxOs at reserve script ${RESERVE_SCRIPT_ADDRESS}`);
   }
 
+  // Sum only ADA from UTxOs that actually carry DJED or SHEN inventory.
+  // Otherwise an unrelated UTxO that Coti parks at this script address
+  // (vault setup, migration UTxOs, fee accounting) would inflate
+  // `totalLovelace` and over-state coverage. Today the reserve script
+  // hosts exactly 3 UTxOs, all of which carry inventory, but the filter
+  // makes the invariant explicit.
   let totalLovelace = 0n;
   let djedInventory = 0n;
   let shenInventory = 0n;
+  let countedUtxoCount = 0;
   for (const u of utxos) {
-    totalLovelace += BigInt(u.lovelace ?? '0');
+    let utxoHasInventory = false;
     for (const a of u.assets ?? []) {
       if (a.policyId !== DJED_POLICY) continue;
-      if (a.assetNameHex === DJED_ASSETNAMEHEX) djedInventory += BigInt(a.quantity ?? '0');
-      else if (a.assetNameHex === SHEN_ASSETNAMEHEX) shenInventory += BigInt(a.quantity ?? '0');
+      if (a.assetNameHex === DJED_ASSETNAMEHEX) {
+        djedInventory += BigInt(a.quantity ?? '0');
+        utxoHasInventory = true;
+      } else if (a.assetNameHex === SHEN_ASSETNAMEHEX) {
+        shenInventory += BigInt(a.quantity ?? '0');
+        utxoHasInventory = true;
+      }
     }
+    if (utxoHasInventory) {
+      totalLovelace += BigInt(u.lovelace ?? '0');
+      countedUtxoCount++;
+    }
+  }
+  if (countedUtxoCount === 0) {
+    throw new Error(
+      `djed-reserves: no UTxOs at ${RESERVE_SCRIPT_ADDRESS} carry DJED/SHEN inventory — ` +
+      `address may have been retired or the script redeployed.`,
+    );
   }
   const adaCollateral = Number(totalLovelace) / 1_000_000;
 
@@ -214,6 +236,7 @@ async function getPrice(pair: string): Promise<AttestationQuote> {
     rawPayload: {
       reserveScriptAddress: RESERVE_SCRIPT_ADDRESS,
       utxoCount: utxos.length,
+      countedUtxoCount,
       adaCollateral,
       djedReserveInventoryRaw: djedInventory.toString(),
       shenReserveInventoryRaw: shenInventory.toString(),

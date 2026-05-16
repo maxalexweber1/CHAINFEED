@@ -14,8 +14,10 @@
  *
  * Verification recipe (for consumers):
  *   1. Parse the envelope JSON.
- *   2. For each entry under `files`, compute sha256(filename + body)
- *      and compare against `checksum.files[filename]`.
+ *   2. For each entry under `files`, compute sha256 of the file body
+ *      (UTF-8 bytes, no filename prefix) and compare against
+ *      `checksum.files[filename]`. The embedded README and
+ *      `verifyAuditPack` both use this convention.
  *   3. For each `txHash` in `aggregator-meta.json` or per-source files,
  *      query the Cardano chain (any Blockfrost / Koios / Cardanoscan)
  *      and confirm the tx exists at the documented block height.

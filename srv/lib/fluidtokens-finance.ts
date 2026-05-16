@@ -271,14 +271,24 @@ export function canLiquidate(inp: LiquidationInputs): { canLiquidate: boolean; c
   if (inp.collateralLovelace <= 0n) {
     return { canLiquidate: true, currentLtv: Infinity };
   }
-  const debtLovelace = Number(inp.remainingDebt) * inp.lovelacePerPrincipalUnit;
-  const collLovelace = Number(inp.collateralLovelace);
-  const ltvFraction = debtLovelace / collLovelace;
-  // LTV in source-units: same scale as liquidationLtv. The deployed USDCx
-  // pool has liquidationLtv=100 which means 1.00× — so we report
-  // `currentLtv = ltvFraction * 100`.
-  const currentLtv = ltvFraction * 100;
-  return { canLiquidate: inp.liquidationLtv < currentLtv, currentLtv };
+  // Compute the debt-in-lovelace using BigInt math so large pool / stable
+  // rate products don't lose precision in Float64 (e.g. 1e9 raw debt × 4e6
+  // rate = 4e15 — past the 2^53 safe-integer boundary). We carry one
+  // decimal of precision on `lovelacePerPrincipalUnit` by scaling x1000
+  // before the BigInt multiply, then dividing back when we convert to a
+  // Float64 ratio (which is fine — the ratio itself is small).
+  const RATE_SCALE = 1000n;
+  const rateScaled = BigInt(Math.round(inp.lovelacePerPrincipalUnit * Number(RATE_SCALE)));
+  const debtLovelaceScaled = inp.remainingDebt * rateScaled;
+  // `currentLtv = (debtLovelace / collateralLovelace) × 100`
+  //            = ((debtLovelaceScaled / RATE_SCALE) / collateralLovelace) × 100
+  // We do the division at the end to stay in BigInt as long as possible;
+  // both operands of the final Number-cast are < 2^53 by construction
+  // (collateralLovelace ≤ supply caps, ratio is ≤ ~1000 in practice).
+  const collScaled = inp.collateralLovelace * RATE_SCALE;
+  if (collScaled === 0n) return { canLiquidate: true, currentLtv: Infinity };
+  const ltvNumeric = Number(debtLovelaceScaled * 100n / collScaled);
+  return { canLiquidate: inp.liquidationLtv < ltvNumeric, currentLtv: ltvNumeric };
 }
 
 // ── Equity at liquidation ────────────────────────────────────────────

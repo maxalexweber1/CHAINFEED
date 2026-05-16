@@ -134,9 +134,15 @@ const KOIOS_PAGE_SIZE = 1000;
 const KOIOS_MAX_PAGES = 10;          // hard cap — Minswap V2 has ~3.2k UTxOs, room for growth
 
 const SNAPSHOT_TTL_MS = 30_000;
-interface CachedSnapshot { fetchedAtMs: number; utxos: PoolUtxo[] }
+interface CachedSnapshot { fetchedAtMs: number; utxos: PoolUtxo[]; generation: number }
 let snapshot: CachedSnapshot | null = null;
 let inflight: Promise<PoolUtxo[]> | null = null;
+/**
+ * Bumped by `invalidate()` (called from the watch-event handler when a pool
+ * UTxO is consumed). Used to discard in-flight results that started against
+ * the pre-invalidation chain state.
+ */
+let snapshotGeneration = 0;
 
 function normaliseRow(r: KoiosUtxoRow): PoolUtxo {
   const assets = (r.asset_list ?? []).map(a => ({
@@ -168,18 +174,40 @@ async function loadPoolUtxos(): Promise<PoolUtxo[]> {
     return snapshot.utxos;
   }
   if (inflight) return inflight;
+  // Snapshot the generation at fetch-start. If `invalidate()` bumps it
+  // while we're paginating, drop the result so callers re-fetch.
+  const startGen = snapshotGeneration;
   inflight = (async () => {
     try {
       const all: PoolUtxo[] = [];
+      let lastPageSize = 0;
+      let pagesFetched = 0;
       for (let page = 0; page < KOIOS_MAX_PAGES; page++) {
         const rows = await fetchPage(page * KOIOS_PAGE_SIZE);
         for (const r of rows) all.push(normaliseRow(r));
+        lastPageSize = rows.length;
+        pagesFetched = page + 1;
         if (rows.length < KOIOS_PAGE_SIZE) break;
+      }
+      // Defensive truncation guard. If we filled every page allowed, the
+      // remote almost certainly had more rows — silently returning a
+      // partial snapshot would let big pools fall outside the result set
+      // (Minswap V2 sits ~3.2k UTxOs today, KOIOS_MAX_PAGES=10 → cap 10k).
+      if (pagesFetched === KOIOS_MAX_PAGES && lastPageSize === KOIOS_PAGE_SIZE) {
+        throw new Error(
+          `minswap-v2: hit pagination cap (${KOIOS_MAX_PAGES} pages × ${KOIOS_PAGE_SIZE}) ` +
+          `at credential ${POOL_CREDENTIAL} with last page full — raise KOIOS_MAX_PAGES.`,
+        );
       }
       if (all.length === 0) {
         throw new Error('minswap-v2: koios returned no UTxOs at pool credential');
       }
-      snapshot = { fetchedAtMs: Date.now(), utxos: all };
+      // Generation check: if `invalidate()` fired while we paginated, the
+      // snapshot we'd write is already stale. Don't store it; the next
+      // call will re-fetch.
+      if (startGen === snapshotGeneration) {
+        snapshot = { fetchedAtMs: Date.now(), utxos: all, generation: startGen };
+      }
       return all;
     } finally {
       inflight = null;
@@ -188,8 +216,19 @@ async function loadPoolUtxos(): Promise<PoolUtxo[]> {
   return inflight;
 }
 
+/**
+ * Drop the cached snapshot. Called by the registry's `invalidateSource`
+ * hook on watch events. Bumps `snapshotGeneration` so any in-flight fetch
+ * doesn't write stale data on completion.
+ */
+function invalidate(): void {
+  snapshotGeneration++;
+  snapshot = null;
+}
+
 /** Reset the in-memory snapshot cache. Used by tests to force a fresh fetch. */
 function _resetCache(): void {
+  snapshotGeneration++;
   snapshot = null;
   inflight = null;
 }
@@ -259,6 +298,8 @@ assertIsAdapter(adapter, 'minswap-v2');
 
 const exported = {
   ...adapter,
+  // invalidation hook for the registry's watch-event handler:
+  invalidate,
   // exposed for tests:
   _resetCache,
   _PAIR_CONFIG: PAIR_CONFIG,

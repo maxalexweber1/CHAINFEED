@@ -103,17 +103,18 @@ async function getPrice(pair: string): Promise<PriceQuote> {
     throw new Error(`sundaeswap: no pools returned for ${pair}`);
   }
 
-  // Pick the pool with the largest ADA reserve, ignoring dust.
+  // Pick the pool with the largest ADA reserve, ignoring dust. Require the
+  // token side to be non-zero in the selection predicate — otherwise the
+  // deepest-ADA pool with an empty token reserve would shadow a healthier
+  // pool with a smaller (but real) ADA reserve.
   let best: { adaQ: bigint; tokenQ: bigint; id?: string } | null = null;
   for (const p of pools) {
     const adaQ = BigInt(p?.current?.quantityA?.quantity ?? '0');
+    const tokenQ = BigInt(p?.current?.quantityB?.quantity ?? '0');
     if (adaQ < MIN_ADA_RESERVE_LOVELACE) continue;
+    if (tokenQ <= 0n) continue;
     if (!best || adaQ > best.adaQ) {
-      best = {
-        adaQ,
-        tokenQ: BigInt(p?.current?.quantityB?.quantity ?? '0'),
-        id: p?.id,
-      };
+      best = { adaQ, tokenQ, id: p?.id };
     }
   }
   if (!best) {

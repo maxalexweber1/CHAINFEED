@@ -366,6 +366,7 @@ await t('liquidity probe wired in → liquidity block populated', async () => {
       // Verify the orchestrator passes the right token-id (policy + assetName).
       assert.equal(tokenId, STABLE_METADATA.USDM!.policyId + STABLE_METADATA.USDM!.assetNameHex);
       return {
+        marginalPrice: 0.247,
         midPrice: 0.247,
         depthAda: 50_000,
         depthAtMaxProbed: false,

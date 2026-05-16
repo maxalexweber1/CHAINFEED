@@ -143,6 +143,8 @@ export async function computeStableHealth(
     } catch (err) {
       log('warn', `pegDeviationBps compute failed for ${meta.symbol}: ${(err as Error)?.message ?? err}`);
     }
+  } else if (adaUsdResult.status === 'rejected') {
+    log('warn', `ADA-USD fanout failed for ${meta.symbol} peg-deviation: ${(adaUsdResult.reason as Error)?.message ?? adaUsdResult.reason}`);
   }
 
   // ── reserves block ─────────────────────────────────────────────────
@@ -178,7 +180,17 @@ export async function computeStableHealth(
     const rp = att.rawPayload as { healthBucket?: string } | null | undefined;
     if (rp && typeof rp.healthBucket === 'string') reservesBucket = rp.healthBucket;
   } else if (reservesResult.status === 'rejected') {
+    // Fanout threw — degrade to "no source available" so the reserves-source-missing
+    // alert can fire (it gates on `reservesKind === 'none'`).
+    reservesKind = 'none';
     log('warn', `reserves fanout failed for ${meta.reservesPair}: ${(reservesResult.reason as Error)?.message ?? reservesResult.reason}`);
+  } else if (reservesResult.status === 'fulfilled' && reservesResult.value !== null
+      && reservesResult.value.quotes.length === 0) {
+    // Fanout succeeded but no source returned a quote — same effective state
+    // as "none". Without this reset, reservesKind stays at the optimistic
+    // 'on-chain-attestation' default and the alert never fires.
+    reservesKind = 'none';
+    log('warn', `reserves fanout returned 0 quotes for ${meta.reservesPair}`);
   }
 
   // ── supply block ───────────────────────────────────────────────────
@@ -187,6 +199,8 @@ export async function computeStableHealth(
   if (supplyResult.status === 'fulfilled') {
     supplyTotal = supplyResult.value.totalSupply;
     supplyCirc  = supplyResult.value.circulatingSupply;
+  } else if (supplyResult.status === 'rejected') {
+    log('warn', `supply fetch failed for ${meta.symbol}: ${(supplyResult.reason as Error)?.message ?? supplyResult.reason}`);
   }
 
   // For USD-peg fiat-custodial reserves, USD-value of supply == circulating

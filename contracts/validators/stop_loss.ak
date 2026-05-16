@@ -18,7 +18,10 @@
 
 use aiken/collection/list
 use aiken/interval.{Finite, before}
-use cardano/transaction.{OutputReference, Transaction, placeholder}
+use cardano/address.{Address, Script, VerificationKey}
+use cardano/assets
+use cardano/transaction.{Input, NoDatum, Output, OutputReference, Transaction,
+  placeholder}
 use chainfeed.{ChainfeedQuote, SignedQuote, is_fresh, not_expired, verify}
 
 /// Locked-in conditions, written by the owner at funding time.
@@ -50,7 +53,7 @@ validator stop_loss {
   spend(
     datum: Option<Datum>,
     redeemer: Redeemer,
-    _input: OutputReference,
+    own_ref: OutputReference,
     tx: Transaction,
   ) {
     expect Some(d) = datum
@@ -82,14 +85,19 @@ validator stop_loss {
         expect list.has(tx.extra_signatories, d.owner_pkh)
         redeemer.signed.quote.price_milli_units >= d.liquidation_price_milli_units
       }
-      Liquidate ->
-        // Permissionless trigger: anyone can submit if price < floor.
-        // We don't check output destination here for demo simplicity — a
-        // production version would verify an output to liquidator_pkh holds
-        // the locked value (to prevent the liquidator triggering then
-        // pocketing funds elsewhere). Keeping this terse so the verify-
-        // pattern is the focus.
-        redeemer.signed.quote.price_milli_units < d.liquidation_price_milli_units
+      Liquidate -> {
+        // Permissionless trigger: anyone may submit when price < floor,
+        // BUT the locked value must flow to the pre-designated
+        // `liquidator_pkh`. Without this gate, any caller could trigger
+        // and redirect funds to themselves.
+        let price_below_floor =
+          redeemer.signed.quote.price_milli_units < d.liquidation_price_milli_units
+        let locked_lovelace = locked_lovelace_at(tx.inputs, own_ref)
+        and {
+          price_below_floor,
+          pays_at_least_to_liquidator(tx.outputs, d.liquidator_pkh, locked_lovelace),
+        }
+      }
     }
   }
 
@@ -97,6 +105,36 @@ validator stop_loss {
   else(_) {
     fail @"stop_loss: only spend purpose supported"
   }
+}
+
+/// Sum of lovelace at the script input being spent. Looks up the input by
+/// its OutputReference (the validator's own input is in `tx.inputs`).
+fn locked_lovelace_at(inputs: List<Input>, own_ref: OutputReference) -> Int {
+  expect Some(own_input) =
+    list.find(inputs, fn(i) { i.output_reference == own_ref })
+  assets.lovelace_of(own_input.output.value)
+}
+
+/// True iff at least one output's payment credential is `VerificationKey(pkh)`
+/// AND its lovelace ≥ `min_lovelace`. The liquidator is free to bundle
+/// additional value (e.g. a fee output to themselves) but must at minimum
+/// hand the locked principal to the designated address.
+fn pays_at_least_to_liquidator(
+  outputs: List<Output>,
+  liquidator_pkh: ByteArray,
+  min_lovelace: Int,
+) -> Bool {
+  list.any(
+    outputs,
+    fn(o) {
+      let Address { payment_credential, .. } = o.address
+      when payment_credential is {
+        VerificationKey(pkh) ->
+          pkh == liquidator_pkh && assets.lovelace_of(o.value) >= min_lovelace
+        _ -> False
+      }
+    },
+  )
 }
 
 // ── Tests ────────────────────────────────────────────────────────────
@@ -140,6 +178,41 @@ const placeholder_oref: OutputReference =
     output_index: 0,
   }
 
+// Lovelace locked in the script input used by the Liquidate-path tests.
+const locked_amount_lovelace: Int = 5_000_000
+
+fn script_input_with_value(lovelace: Int) -> Input {
+  Input {
+    output_reference: placeholder_oref,
+    output: Output {
+      address: Address {
+        // Script-credential placeholder — only payment_credential of OUTPUTS
+        // is read by `pays_at_least_to_liquidator`, so the input's address
+        // contents don't matter for the gate; use a zero hash.
+        payment_credential: Script(
+          #"00000000000000000000000000000000000000000000000000000000",
+        ),
+        stake_credential: None,
+      },
+      value: assets.from_lovelace(lovelace),
+      datum: NoDatum,
+      reference_script: None,
+    },
+  }
+}
+
+fn output_paying(pkh: ByteArray, lovelace: Int) -> Output {
+  Output {
+    address: Address {
+      payment_credential: VerificationKey(pkh),
+      stake_credential: None,
+    },
+    value: assets.from_lovelace(lovelace),
+    datum: NoDatum,
+    reference_script: None,
+  }
+}
+
 fn signed_fixture() -> SignedQuote {
   SignedQuote {
     quote: ChainfeedQuote {
@@ -170,6 +243,20 @@ fn tx_with(upper_bound_ms: Int, signers: List<ByteArray>) -> Transaction {
   }
 }
 
+/// Liquidate-path tx builder: includes the script input being spent and an
+/// optional output paying the liquidator.
+fn liquidate_tx(
+  upper_bound_ms: Int,
+  outputs: List<Output>,
+) -> Transaction {
+  Transaction {
+    ..placeholder,
+    validity_range: before(upper_bound_ms),
+    inputs: [script_input_with_value(locked_amount_lovelace)],
+    outputs: outputs,
+  }
+}
+
 // ── Withdraw path ────────────────────────────────────────────
 
 test withdraw_succeeds_when_signer_present_and_price_at_or_above_floor() {
@@ -194,18 +281,52 @@ test withdraw_aborts_when_owner_did_not_sign() fail {
 
 // ── Liquidate path ───────────────────────────────────────────
 
-test liquidate_succeeds_when_price_below_floor() {
+test liquidate_succeeds_when_price_below_floor_and_pays_liquidator() {
   let r = Redeemer { action: Liquidate, signed: signed_fixture() }
-  let tx = tx_with(fresh_now_ms, [])
-  // Permissionless trigger — no signer required.
+  let tx =
+    liquidate_tx(
+      fresh_now_ms,
+      [output_paying(liquidator_pkh, locked_amount_lovelace)],
+    )
+  // Permissionless trigger — no signer required, but liquidator must be paid.
   stop_loss.spend(Some(datum_with_floor(1_000_000)), r, placeholder_oref, tx)
 }
 
 test liquidate_returns_false_when_price_at_or_above_floor() {
   let r = Redeemer { action: Liquidate, signed: signed_fixture() }
-  let tx = tx_with(fresh_now_ms, [])
+  let tx =
+    liquidate_tx(
+      fresh_now_ms,
+      [output_paying(liquidator_pkh, locked_amount_lovelace)],
+    )
   // Floor == price → strictly-less-than fails → no liquidation.
   !stop_loss.spend(Some(datum_with_floor(500_000)), r, placeholder_oref, tx)
+}
+
+test liquidate_blocks_theft_to_attacker_address() {
+  // Attacker triggers Liquidate when price is below floor BUT routes funds
+  // to themselves instead of the designated liquidator. Must return False.
+  let attacker_pkh: ByteArray =
+    #"00000000000000000000000000000000000000000000000000000099"
+  let r = Redeemer { action: Liquidate, signed: signed_fixture() }
+  let tx =
+    liquidate_tx(
+      fresh_now_ms,
+      [output_paying(attacker_pkh, locked_amount_lovelace)],
+    )
+  !stop_loss.spend(Some(datum_with_floor(1_000_000)), r, placeholder_oref, tx)
+}
+
+test liquidate_blocks_underpayment_to_liquidator() {
+  // Liquidator-addressed output exists but pays less than the locked
+  // amount — should be rejected (no skimming the principal).
+  let r = Redeemer { action: Liquidate, signed: signed_fixture() }
+  let tx =
+    liquidate_tx(
+      fresh_now_ms,
+      [output_paying(liquidator_pkh, locked_amount_lovelace - 1)],
+    )
+  !stop_loss.spend(Some(datum_with_floor(1_000_000)), r, placeholder_oref, tx)
 }
 
 // ── Quote-validity short-circuits (abort paths) ──────────────

@@ -55,17 +55,46 @@ t('canonicalQuoteBytes is deterministic', () => {
 });
 
 t('canonicalQuoteBytes matches pinned golden bytes', () => {
-  // Captured 2026-05-09 against CSL 15.x. If this fails, something in the
-  // PlutusData encoding changed — investigate before updating the constant.
-  // To regenerate: console.log(canonicalQuoteBytes(SAMPLE_QUOTE).toString('hex'))
+  // Captured 2026-05-16 against @emurgo/cardano-serialization-lib-nodejs 15.x.
+  // Decoded structure:
+  //   d8 79 9f                 -- CBOR tag 121 (Constr 0), indefinite-length list
+  //     47 4144412d555344      -- bytes("ADA-USD")
+  //     1a 00098328            -- uint 623_400
+  //     1b 000001d1a94a2000    -- uint 2_000_000_000_000
+  //     1b 000001d1a9458c20    -- uint 1_999_999_700_000
+  //   ff                       -- "break" terminator
+  // The byte sequence IS the canonical signing payload; if this fails,
+  // signatures produced after the change will NOT verify on-chain against
+  // signatures produced before — treat as a breaking-change signal, not a
+  // "update the pin" prompt.
+  const EXPECTED_HEX =
+    'd8799f474144412d5553441a000983281b000001d1a94a20001b000001d1a9458c20ff';
   const actual = canonicalQuoteBytes(SAMPLE_QUOTE).toString('hex');
-  // Constr 0 with 4 fields:
-  //   tag 121 + 4-element list of [bytes("ADA-USD"), int 623400, int 2e12, int 1.9999997e12]
-  // Plutus canonical CBOR for Constr 0 uses CBOR tag 121 with an array.
-  // We don't pin the exact hex (CSL version drift would break it); we pin
-  // structural invariants instead.
-  assert(actual.length > 20, `expected non-trivial encoding, got ${actual.length} hex chars`);
-  assert(actual.includes('4144412d555344'), 'expected ADA-USD ASCII hex (4144412d555344) in encoding');
+  assert.equal(actual, EXPECTED_HEX, 'canonical encoding drift — see comment');
+});
+
+t('canonicalQuoteBytes handles edge fixtures (empty pair, zero price, max int)', () => {
+  // Three corners we care about:
+  //   1. empty `pair` bytes — confirms 0-length ByteArray encodes cleanly
+  //   2. priceMilliUnits = 0n  — would-be Constr alt confusion / CBOR int 0
+  //   3. priceMilliUnits at 2^60 — past Number.MAX_SAFE_INTEGER (2^53), proves
+  //      the encoder isn't silently coercing through Number
+  const cases: ChainfeedQuote[] = [
+    { pair: '',         priceMilliUnits: 0n,                signedAtMs: 0n, validUntilMs: 0n },
+    { pair: 'X',        priceMilliUnits: 1n,                signedAtMs: 0n, validUntilMs: 1n },
+    { pair: 'ADA-USD',  priceMilliUnits: (1n << 60n) + 7n,  signedAtMs: 0n, validUntilMs: (1n << 60n) },
+  ];
+  for (const q of cases) {
+    const hex = canonicalQuoteBytes(q).toString('hex');
+    // Every encoding starts with the Constr 0 indefinite-list tag d8799f.
+    assert(hex.startsWith('d8799f'), `expected Constr 0 prefix, got ${hex.slice(0, 8)} for ${JSON.stringify(q, (_k,v) => typeof v === 'bigint' ? v.toString() : v)}`);
+    // Round-trip — confirms no truncation on the big-int branch.
+    const pd = buildQuotePlutusData(q);
+    assert.equal(
+      Buffer.from(CSL.PlutusData.from_bytes(pd.to_bytes()).to_bytes()).toString('hex'),
+      hex,
+    );
+  }
 });
 
 t('signQuote produces 64-byte ed25519 signature', () => {

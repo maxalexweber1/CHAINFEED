@@ -164,11 +164,15 @@ export function decodeRepaymentMode(d: CSL.PlutusData): RepaymentMode | null {
     }
     case 1: return { kind: 'principal-and-interest-on-installments' };
     case 2: {
-      // Source has [Int] for perpetual but live datums use [Int_period?, Int_apyIncreaseLinearCoefficient].
-      // We surface the second field which is the one finance.ak references.
+      // Source has [Int] for perpetual but live datums use exactly two fields:
+      //   [period_or_similar, apyIncreaseLinearCoefficient]
+      // We require the exact length so a future 3-field variant doesn't
+      // silently misread the wrong index. Bail to null (decoder semantics:
+      // null = skip + surface) rather than misreport.
       const fields = c.data();
-      const last = fields.len() > 0 ? intNum(fields.get(fields.len() - 1)) : 0;
-      return { kind: 'perpetual', apyIncreaseLinearCoefficient: last ?? 0 };
+      if (fields.len() !== 2) return null;
+      const apyCoeff = intNum(fields.get(1));
+      return { kind: 'perpetual', apyIncreaseLinearCoefficient: apyCoeff ?? 0 };
     }
     default: return null;
   }

@@ -212,6 +212,17 @@ export async function computeFluidHealth(deps: FluidHealthDeps): Promise<FluidHe
     b.collateralLovelace      += l.collateralLovelace;
 
     // Current debt via finance.ak.
+    // ── Known systematic bias ─────────────────────────────────────────
+    // The Loan datum doesn't surface `initialGracePeriod`,
+    // `repaymentTimeWindow`, or `penaltyFeeForLateRepayment`. The matching
+    // pool's CommonData does, but the join isn't done here — pools and loans
+    // are iterated independently. We pass 0 for all three, which OVER-states
+    // accrued debt for loans still in grace and OVER-counts `late` for loans
+    // whose repaymentTimeWindow hasn't elapsed yet. Correct direction for the
+    // `liquidatable` count (false positives over false negatives at the
+    // system-health-monitoring abstraction layer), but the `currentDebtRaw`
+    // rollup is a soft-upper-bound — not a precise debt-outstanding figure.
+    // Surface this in any consumer documentation that uses these numbers.
     let currentDebt = l.datum.principal;
     try {
       if (l.datum.repaymentMode.kind === 'perpetual') {
@@ -221,7 +232,7 @@ export async function computeFluidHealth(deps: FluidHealthDeps): Promise<FluidHe
           nowMs,
           interestRate: l.datum.interestRate,
           apyIncreaseLinearCoefficient: l.datum.repaymentMode.apyIncreaseLinearCoefficient,
-          initialGracePeriod: 0,    // not surfaced on Loan datum; safe lower bound for accrued debt
+          initialGracePeriod: 0,    // see "Known systematic bias" above
           installmentPeriod: l.datum.installmentPeriod,
           repaidInstallments: l.datum.repaidInstallments,
         });
@@ -233,10 +244,10 @@ export async function computeFluidHealth(deps: FluidHealthDeps): Promise<FluidHe
           isPerpetualLoan: false,
           nowMs,
           lendDateMs: l.datum.lendDateMs,
-          initialGracePeriod: 0,
+          initialGracePeriod: 0,    // see "Known systematic bias" above
           installmentPeriod: l.datum.installmentPeriod,
           repaidInstallments: l.datum.repaidInstallments,
-          repaymentTimeWindow: 0,
+          repaymentTimeWindow: 0,   // see "Known systematic bias" above
         });
         if (late) b.late++;
         currentDebt = installmentRemainingDebt({
@@ -244,7 +255,7 @@ export async function computeFluidHealth(deps: FluidHealthDeps): Promise<FluidHe
           interestRate: l.datum.interestRate,
           totalInstallments: l.datum.totalInstallments,
           repaidInstallments: l.datum.repaidInstallments,
-          penaltyFeeForLateRepayment: 0,
+          penaltyFeeForLateRepayment: 0,   // see "Known systematic bias" above
         }, amortizing, late);
       }
     } catch (err) {

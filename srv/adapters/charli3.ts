@@ -124,6 +124,24 @@ function resolveNetwork(): string {
 }
 
 /**
+ * One-shot warning when Charli3 is asked to serve a network it has no feeds
+ * for (today: anything other than mainnet/preprod, e.g. preview). The
+ * aggregator otherwise just drops Charli3 silently from every pair —
+ * surprising during dev, and confusing in incident postmortems.
+ */
+let _unsupportedNetworkWarned: string | null = null;
+function warnOnceIfUnsupportedNetwork(network: string): void {
+  if (_unsupportedNetworkWarned === network) return;
+  if (network === 'mainnet' || network === 'preprod') return;
+  _unsupportedNetworkWarned = network;
+  // eslint-disable-next-line no-console
+  console.warn(
+    `[charli3] network '${network}' has no Charli3 deployment — every pair will be reported as unsupported. ` +
+    `Set CHARLI3_NETWORK=mainnet (or preprod) to keep Charli3 in the fanout.`,
+  );
+}
+
+/**
  * Decode a Charli3 oracle inline datum (hex CBOR) into a structured price.
  * Throws if the CBOR doesn't match the documented `GenericData → PriceData`
  * shape, or if any required price_map field (price, timestamp, expiry) is
@@ -184,7 +202,10 @@ function decodeCharli3Datum(datumHex: string): DecodedPrice {
     const p = precV.as_integer();
     if (p) precision = Number(p.to_str());
   }
-  if (!Number.isFinite(precision) || precision < 0 || precision > 30) {
+  // Upper bound 18 = Cardano-native maximum decimal places; anything beyond
+  // is a misencoded datum and would push `rawToNumber` to underflow to 0
+  // (and then `invert: true` flips that to `Infinity`).
+  if (!Number.isFinite(precision) || precision < 0 || precision > 18) {
     throw new Error(`charli3 datum: precision out of plausible range (${precision})`);
   }
 
@@ -224,6 +245,7 @@ interface UtxoLite {
 
 async function getPrice(pair: string, opts: GetPriceOpts = {}): Promise<Quote> {
   const network = opts.network ?? resolveNetwork();
+  warnOnceIfUnsupportedNetwork(network);
   if (!(FEED_CONFIG as FeedConfigLoose)[network]) {
     throw new Error(`charli3: unsupported network '${network}' (mainnet, preprod)`);
   }

@@ -12,8 +12,20 @@
  */
 
 import cds from '@sap/cds';
+import { assertNetworkConsistency } from './x402-config';
+import { assertEncryptionConfigured } from './lib/secret-crypto';
 
 const log = cds.log('chainfeed');
+
+// ── Boot-time safety gates ───────────────────────────────────────────
+// Run BEFORE watch wiring so a misconfigured network OR a missing KEK
+// fails the boot rather than silently going live with the wrong chain
+// or cleartext webhook secrets at rest.
+(cds as unknown as { on(ev: string, handler: () => void | Promise<void>): void })
+  .on('served', () => {
+    assertNetworkConsistency(log);
+    assertEncryptionConfigured(log);
+  });
 
 // ── ODATANO-WATCH event subscriptions ────────────────────────────────
 // Register on `served` (after CAP has booted every service, including

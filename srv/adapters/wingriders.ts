@@ -142,6 +142,20 @@ async function getPrice(pair: string): Promise<PriceQuote> {
     throw new Error('wingriders: liquidityPools returned empty list');
   }
 
+  // Schema sanity: confirm WingRiders is still returning asset names as the
+  // CIP-67-prefixed HEX (matching our PAIR_CONFIG). If a future API change
+  // switched to UTF-8 ascii labels, every pool would silently fail to match
+  // and the adapter would degrade to "no pool found". A single inspection
+  // surfaces the drift immediately.
+  const sampleName = pools.find(p => p.tokenA?.assetName || p.tokenB?.assetName);
+  const sampleAssetName = sampleName?.tokenA?.assetName ?? sampleName?.tokenB?.assetName ?? '';
+  if (sampleAssetName && !/^[0-9a-f]*$/i.test(sampleAssetName)) {
+    throw new Error(
+      `wingriders: GraphQL returned non-hex assetName ('${sampleAssetName.slice(0, 16)}…') — ` +
+      `PAIR_CONFIG expects hex. Schema drift; update assetName extraction in the adapter.`,
+    );
+  }
+
   // Find ADA / token pools. ADA side has `policyId === ''`.
   // Only CONSTANT_PRODUCT — stableswap math is different and we don't decode it.
   let best: { adaQ: bigint; tokenQ: bigint; version?: string; tvl?: string | null } | null = null;

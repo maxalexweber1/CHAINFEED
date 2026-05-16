@@ -10,8 +10,10 @@ entity AggregatedPrices : cuid, managed {
   deviationPct    : Decimal(8,4);
   // Distance from peg in basis points. Null for non-stable pairs (BTC-ADA,
   // NIGHT-ADA, ADA-USD, …). Positive = above peg, negative = below.
-  // Range in practice ±1000 bps; Decimal(10,2) leaves headroom for depeg events.
-  pegDeviationBps : Decimal(10,2) null;
+  // Range in practice ±1000 bps; Decimal(14,2) leaves headroom for catastrophic
+  // depegs (a 100× misprice = 990 000 bps) without throwing a numeric-overflow
+  // error inside `persistResult`'s try/catch (which would silently drop the row).
+  pegDeviationBps : Decimal(14,2) null;
   validFrom       : Timestamp;
   validUntil      : Timestamp;
   sources         : Composition of many PriceSources on sources.aggregated = $self;
@@ -63,20 +65,50 @@ entity AlertSubscriptions : cuid, managed {
   thresholdBps     : Decimal(10,2);                  // fire when |pegDeviationBps| ≥ this
   webhookUrl       : String(500);
   // HMAC-SHA256 secret used to sign outgoing webhook bodies. Returned
-  // ONCE in the subscribe response — consumers MUST persist it. Not
-  // recoverable later; subscriptions whose consumer lost the secret
-  // must be cancelled and re-created.
-  hmacSecretHex    : String(64);
+  // ONCE (cleartext) in the subscribe response — consumers MUST persist
+  // it. Not recoverable later; subscriptions whose consumer lost the
+  // secret must be cancelled and re-created.
+  //
+  // Stored encrypted: AES-256-GCM with the env-held KEK (see
+  // `srv/lib/secret-crypto.ts`). Wire form `enc:v1:<base64url>` ≈ 88 chars
+  // for a 32-byte secret. Legacy plain-hex rows (created before the
+  // encryption wire-up) remain readable — `decryptSecret()` passes them
+  // through.
+  hmacSecretHex    : String(200);
   validUntil       : Timestamp;
   status           : String(20) default 'active';    // 'active' | 'cancelled' | 'expired'
   // Cooldown bookkeeping (set by the worker). Prevents alert-storm when
   // a stable oscillates around the threshold.
   lastFiredAt      : Timestamp null;
   lastBpsAtFire    : Decimal(10,2) null;
+  // Rearm-hysteresis gate. `null` = never fired; `false` = fired and not yet
+  // back below threshold × 0.5; `true` = breach resolved, ready to fire again.
+  // Without this, `shouldFireAlert`'s rearm comparison degenerates (the
+  // recorded `lastBpsAtFire` is always ≥ threshold by construction) and the
+  // second alert never fires.
+  armedSinceFire   : Boolean null;
   fireCount        : Integer default 0;
   // x402 payment proof for the subscription window. `subscribePegAlert`
   // verifies this tx on-chain via `@odatano/x402`'s verifyConfirmedPayment;
   // the @assert.unique above is the replay defence — v2 has no nonce
   // table, so a confirmed tx redeems exactly one subscription.
   paymentTxHash    : String(64) null;
+}
+
+// Single-instance advisory lock for background workers (currently just
+// peg-monitor). Two operators accidentally starting two monitor processes
+// would otherwise both fire duplicate webhooks and race on lastFiredAt; the
+// lease enforces "one worker at a time per logical role".
+//
+// Algorithm: worker periodically tries to claim the lease via CAS UPDATE
+// (only if leaseHolder matches us, or leaseUntil has expired). On lease
+// loss, the worker skips pollOnce and retries the claim on the next tick.
+entity WorkerLeases {
+  // Logical worker role, e.g. 'peg-monitor'. One row per role.
+  key name : String(40);
+  // Per-process UUID set at boot. Round-trip CAS check uses this to detect
+  // takeovers by another worker.
+  leaseHolder : String(64);
+  // Wall-clock expiry. Worker renews before TTL/2 to keep the lease alive.
+  leaseUntil  : Timestamp;
 }

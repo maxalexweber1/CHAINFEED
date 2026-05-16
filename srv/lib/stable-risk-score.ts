@@ -201,8 +201,13 @@ export function alertsFor(inputs: RiskScoreInputs): string[] {
     else if (inputs.attestationAgeMs > ONE_WEEK_MS) out.push('attestation-stale');
   }
 
-  // Price-source health
-  if (inputs.priceSourceConfidence !== null && inputs.priceSourceConfidence < 0.5) {
+  // Price-source health.
+  // Single-source fanouts get capped at SINGLE_SOURCE_CONFIDENCE_CAP = 0.5
+  // in `aggregate()`, so the natural strict-less-than gate would never trip
+  // for the documented "degraded" case. We treat the cap *itself* as
+  // degraded — multi-source aggregates always score strictly above 0.5
+  // unless an additional source is also degraded.
+  if (inputs.priceSourceConfidence !== null && inputs.priceSourceConfidence <= 0.5) {
     out.push('price-source-degraded');
   }
   if ((inputs.priceSourcesUsed ?? 0) === 0) {

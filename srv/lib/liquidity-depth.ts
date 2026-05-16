@@ -26,11 +26,14 @@
  * common tier. Real fees vary slightly per pool; consumers needing exact
  * post-fee execution should use the per-pool data.
  *
- * **Mid-price methodology:** `midPrice = yTotal / xTotal` (post-fee
- * marginal at zero notional). This is the canonical no-impact spot —
- * cleaner than the previous "best observed across probes" heuristic
- * (which made sense for an aggregator-routed setup but is not needed
- * when we compute exact constant-product slippage ourselves).
+ * **Mid-price methodology:** `marginalPrice = yTotal / xTotal` — the
+ * PRE-fee marginal at zero notional. Slippage figures (computed against
+ * this mid) therefore *include* the fee component: a probe of 100 ADA
+ * into an infinite-depth pool reports `slippagePct ≈ feePct`. Consumers
+ * setting `targetSlippagePct ≤ feePct` should expect `depthAda = 0` —
+ * the fee alone consumes the budget. The legacy field `midPrice` is
+ * kept on the result for backwards compatibility; both fields hold the
+ * same number.
  *
  * **Conservative depth:** scan smallest-to-largest. Depth is the largest
  * probe whose slippage AND every smaller probe's slippage stayed within
@@ -75,7 +78,17 @@ export interface ProbedPoint {
 }
 
 export interface DepthResult {
-  /** Marginal mid-price `yTotal / xTotal`. Null if no reserves were available. */
+  /**
+   * Pre-fee marginal price `yTotal / xTotal`. Null if no reserves were
+   * available. Slippage measurements are taken against this number, so
+   * slippage absorbs the trading fee — a 100-ADA probe against an
+   * infinite-depth pool reports `slippagePct ≈ feeFraction × 100`.
+   */
+  marginalPrice: number | null;
+  /**
+   * @deprecated alias for `marginalPrice` — kept for callers serializing
+   * the legacy field name. New code should read `marginalPrice`.
+   */
   midPrice: number | null;
   /** Notional in ADA swappable at-or-below `targetSlippagePct` (conservative). */
   depthAda: number;
@@ -217,6 +230,7 @@ export async function executableDepthForToken(
 
   if (xTotal <= 0 || yTotal <= 0) {
     return {
+      marginalPrice: null,
       midPrice: null,
       depthAda: 0,
       depthAtMaxProbed: false,
@@ -257,6 +271,7 @@ export async function executableDepthForToken(
   if (depthAda === 0) depthAtMaxProbed = false;
 
   return {
+    marginalPrice: midPrice,
     midPrice,
     depthAda,
     depthAtMaxProbed,

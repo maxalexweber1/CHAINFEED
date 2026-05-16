@@ -24,11 +24,14 @@ const close = (a: number, b: number, eps = 1e-6) => Math.abs(a - b) < eps;
 console.log('stable-convergence ──────────────────────────────────────');
 
 // ── basic shape ──────────────────────────────────────────────────────
-t('empty input → empty result, score 1.0', () => {
+t('empty input → empty result, score null (nothing to converge)', () => {
   const m = computeConvergenceMatrix({ adaPrices: {} });
   assert.deepEqual(m.symbols, []);
   assert.deepEqual(m.matrix, {});
-  assert.equal(m.convergenceScore, 1.0);
+  // 0 priced symbols → null (a dashboard rendering "1.0 — perfectly converged"
+  // for a snapshot where every fanout failed would be a lie). 1 symbol → 1.0
+  // (vacuously converged), exercised in the next test.
+  assert.equal(m.convergenceScore, null);
   assert.equal(m.maxDeviationPct, 0);
   assert.deepEqual(m.outliers, []);
 });
@@ -74,7 +77,7 @@ t('one stable 1% off → maxDeviation ≈ 1.0%, score ≈ 0.8', () => {
   // maxDev ~1.012%
   assert.ok(m.maxDeviationPct > 1.0 && m.maxDeviationPct < 1.1);
   // score = 1 - 1.012/5 ≈ 0.798
-  assert.ok(m.convergenceScore > 0.7 && m.convergenceScore < 0.85);
+  assert.ok(m.convergenceScore !== null && m.convergenceScore > 0.7 && m.convergenceScore < 0.85);
 });
 
 t('matrix is anti-symmetric (ish): A→B and B→A devs are inverses', () => {
@@ -184,7 +187,7 @@ t('realistic snapshot: 5 stables on near-peg → high score, no outliers', () =>
     },
   });
   // Spread is ~0.7% — within warning band by default.
-  assert.ok(m.convergenceScore > 0.85, `expected ≥0.85, got ${m.convergenceScore}`);
+  assert.ok(m.convergenceScore !== null && m.convergenceScore > 0.85, `expected ≥0.85, got ${m.convergenceScore}`);
   assert.deepEqual(m.outliers, []);
 });
 

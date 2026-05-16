@@ -43,8 +43,11 @@ export interface ConvergenceMatrix {
   symbols: string[];
   /** Per-pair cross-rates. matrix[A][B] = implied A-vs-B. Empty for A === B. */
   matrix: Record<string, Record<string, CrossRateEntry>>;
-  /** [0, 1] score: 1.0 = all stables converge perfectly to 1.000, 0 = chaotic. */
-  convergenceScore: number;
+  /**
+   * [0, 1] score: 1.0 = all stables converge perfectly to 1.000, 0 = chaotic.
+   * `null` when there are 0 priced symbols (nothing to converge about).
+   */
+  convergenceScore: number | null;
   /** Maximum absolute deviation observed (in % points) — quick-glance signal. */
   maxDeviationPct: number;
   /** Symbols whose median deviation across pairs exceeded the warning band. */
@@ -114,9 +117,15 @@ export function computeConvergenceMatrix(input: ConvergenceInput): ConvergenceMa
 
   // convergenceScore = 1 - clamp(maxDev / 5%, 0, 1). 0% spread → 1.0;
   // 5%+ spread (extreme depeg) → 0.0. Linear in between.
-  const convergenceScore = symbols.length < 2
-    ? 1.0    // no cross-rates to disagree about
-    : Math.max(0, Math.min(1, 1 - maxDev / 5));
+  // Special cases:
+  //   - 0 symbols: nothing was priced; "perfectly converged" overstates the
+  //     dashboard signal. Return null so consumers render "no data".
+  //   - 1 symbol: trivially converged; 1.0 is fine.
+  const convergenceScore = symbols.length === 0
+    ? null
+    : symbols.length === 1
+      ? 1.0
+      : Math.max(0, Math.min(1, 1 - maxDev / 5));
 
   return {
     symbols,

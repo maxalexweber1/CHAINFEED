@@ -7,8 +7,13 @@
  * against on-chain invariants:
  *
  *   - field[2] (qTokenSupply) === qToken policy total_supply on chain
- *   - field[9].denominator === field[2]   (qTokenRate-as-rational invariant)
  *   - field[0] + field[3] + field[4] ≈ public app's "Total supplied" stat
+ *   - economic invariant: `qTokenRateNum × qTokenSupply ≈ totalSupplied`
+ *     within ~5% (live data: denom on qDJED equals qTokenSupply/4 — the
+ *     4-shard SupplyBatch accounting, NOT the naive identity). Earlier
+ *     versions of this preamble claimed `denom === qTokenSupply`; that
+ *     was the discovery-phase guess, falsified on the first multi-shard
+ *     market we tried. Don't reintroduce it.
  *
  * Outer datum is a `PlutusData.List` (NOT a Constr-wrap). Fields are flat:
  * 9 raw integers + two `[num, denom]` integer pairs at indexes [6] and [9].
@@ -48,7 +53,12 @@ export interface DecodedMarketState {
   lastInterestUpdateMs: number;
   /** field[8] — next batch settlement deadline (ms epoch). */
   nextBatchDeadlineMs: number;
-  /** field[9] — qTokenRate as rational [num, denom]. Invariant: denom === qTokenSupplyRaw. */
+  /**
+   * field[9] — qTokenRate as rational [num, denom]. The denominator is NOT
+   * the qTokenSupply (live qDJED data shows denom = qTokenSupply/4 — the
+   * 4-shard SupplyBatch accounting). The reliable check is the economic
+   * invariant `qTokenRateNum × qTokenSupply ≈ totalSupplied` (within ~5%).
+   */
   qTokenRateNum: bigint;
   qTokenRateDenom: bigint;
   /** field[10] — dust ADA in lovelace (3_000_000 observed across all 3 markets). */

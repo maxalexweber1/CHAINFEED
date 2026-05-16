@@ -7,11 +7,22 @@
 import assert from 'node:assert/strict';
 import { createHmac, randomBytes } from 'node:crypto';
 import {
-  shouldFireAlert, signWebhook, verifyWebhook,
+  shouldFireAlert, signWebhook, verifyWebhook, isRearmingSample,
   generateHmacSecret, validateWebhookUrl,
   HMAC_SIGNATURE_HEADER, HMAC_TIMESTAMP_HEADER, ALERT_PAYLOAD_VERSION,
   type AlertWebhookPayload, type AlertDetectorState,
 } from '../srv/lib/alert-detector';
+
+/** Builder for AlertDetectorState test fixtures — defaults to "never fired". */
+function state(overrides: Partial<AlertDetectorState> = {}): AlertDetectorState {
+  return {
+    thresholdBps:   100,
+    lastFiredAt:    null,
+    lastBpsAtFire:  null,
+    armedSinceFire: null,
+    ...overrides,
+  };
+}
 
 let n = 0, fails = 0;
 function t(name: string, fn: () => void) {
@@ -47,45 +58,65 @@ function payloadFixture(overrides: Partial<AlertWebhookPayload> = {}): AlertWebh
 
 // ── shouldFireAlert ──────────────────────────────────────────────────
 t('shouldFireAlert: below threshold → no fire', () => {
-  const r = shouldFireAlert({ thresholdBps: 100, lastFiredAt: null, lastBpsAtFire: null }, 50, NOW);
+  const r = shouldFireAlert(state(), 50, NOW);
   assert.equal(r.fire, false);
   assert.equal(r.reason, 'below-threshold');
 });
 
 t('shouldFireAlert: clean threshold cross + never-fired → fire', () => {
-  const r = shouldFireAlert({ thresholdBps: 100, lastFiredAt: null, lastBpsAtFire: null }, -250, NOW);
+  const r = shouldFireAlert(state(), -250, NOW);
   assert.equal(r.fire, true);
   assert.equal(r.reason, 'threshold-crossed');
 });
 
 t('shouldFireAlert: direction-agnostic (positive bps fires too)', () => {
-  const r = shouldFireAlert({ thresholdBps: 100, lastFiredAt: null, lastBpsAtFire: null }, 250, NOW);
+  const r = shouldFireAlert(state(), 250, NOW);
   assert.equal(r.fire, true);
 });
 
 t('shouldFireAlert: cooldown blocks repeat fire within 15 min', () => {
   const tenMinAgo = NOW - 10 * 60 * 1000;
   const r = shouldFireAlert(
-    { thresholdBps: 100, lastFiredAt: tenMinAgo, lastBpsAtFire: -250 },
+    state({ lastFiredAt: tenMinAgo, lastBpsAtFire: -250, armedSinceFire: false }),
     -260, NOW,
   );
   assert.equal(r.fire, false);
   assert.equal(r.reason, 'within-cooldown');
 });
 
-t('shouldFireAlert: cooldown elapsed but still elevated → rearming (no fire)', () => {
+t('shouldFireAlert: cooldown elapsed but never re-armed → rearming (no fire)', () => {
   const twentyMinAgo = NOW - 20 * 60 * 1000;
-  // Last fired at -250 bps. Current still at -200 bps (above re-arm = thresh × 0.5 = 50).
+  // Last fired at -250 bps. Current still at -200 bps; armed flag still false
+  // because no sample has come back below thresh × 0.5 = 50 yet.
   const r = shouldFireAlert(
-    { thresholdBps: 100, lastFiredAt: twentyMinAgo, lastBpsAtFire: -250 },
+    state({ lastFiredAt: twentyMinAgo, lastBpsAtFire: -250, armedSinceFire: false }),
     -200, NOW,
   );
   assert.equal(r.fire, false);
   assert.equal(r.reason, 'rearming');
 });
 
+t('shouldFireAlert: cooldown elapsed AND re-armed → fire again (deadlock-fix)', () => {
+  const twentyMinAgo = NOW - 20 * 60 * 1000;
+  // Worker observed a sub-half sample earlier and flipped armedSinceFire=true.
+  // Peg now snapped back beyond the threshold — second alert MUST fire.
+  const r = shouldFireAlert(
+    state({ lastFiredAt: twentyMinAgo, lastBpsAtFire: -250, armedSinceFire: true }),
+    -260, NOW,
+  );
+  assert.equal(r.fire, true);
+  assert.equal(r.reason, 'threshold-crossed');
+});
+
+t('isRearmingSample: |bps| < threshold × 0.5 is rearming', () => {
+  assert.equal(isRearmingSample(100, 40),  true);   // |40| < 50
+  assert.equal(isRearmingSample(100, -40), true);
+  assert.equal(isRearmingSample(100, 50),  false);  // boundary — strict <
+  assert.equal(isRearmingSample(100, 70),  false);
+});
+
 t('shouldFireAlert: NaN currentBps → no fire (degraded data)', () => {
-  const r = shouldFireAlert({ thresholdBps: 100, lastFiredAt: null, lastBpsAtFire: null }, NaN, NOW);
+  const r = shouldFireAlert(state(), NaN, NOW);
   assert.equal(r.fire, false);
   assert.equal(r.reason, 'below-threshold');
 });
