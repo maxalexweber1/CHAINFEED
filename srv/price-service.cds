@@ -149,6 +149,32 @@ service PriceService {
 
   action getStableHealth(symbol : String) returns StableHealthResult;
 
+  // ── Stable assessment: actionable verdict on top of getStableHealth ──
+  // Judgment layer for agents. Collapses the full health block into a
+  // verdict + reasons + suggested actions so a consumer doesn't have to
+  // re-derive thresholds. Two scores, deliberately distinct:
+  //   riskScore            — how healthy the stable is (echo of risk.score)
+  //   assessmentConfidence — how much to trust THIS verdict, given how
+  //                          complete the underlying data was this cycle.
+  // `verdict`, `reasonCodes`, and `suggestedActions` are string-stable so
+  // consumers can branch without parsing prose. The full health block is
+  // nested under `detail` for "show your work".
+
+  type StableAssessmentResult {
+    symbol               : String;
+    verdict              : String;          // 'ok' | 'caution' | 'alert'
+    headline             : String;
+    reasonCodes          : array of String; // alert IDs ∪ derived codes
+    reasons              : array of String; // human expansion, same order
+    suggestedActions     : array of String; // 'reduce-exposure' | 'verify-reserves-manually' | 'retry-later' | 'monitor'
+    assessmentConfidence : Decimal(5,4);    // [0,1] confidence in the verdict
+    riskScore            : Decimal(5,4);     // [0,1] health of the stable
+    computedAt           : Timestamp;
+    detail               : StableHealthResult;
+  }
+
+  action assessStable(symbol : String) returns StableAssessmentResult;
+
   // ── Cross-stable convergence ────────────────────────────────────────
   // NxN matrix of implied stable-vs-stable cross-rates derived through
   // ADA pivot. Outlier flagging + scalar convergenceScore in [0,1].

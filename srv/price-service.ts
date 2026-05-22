@@ -37,6 +37,7 @@ import { GATED_ROUTE_PRICING, priceUnitsForAction, resourcePathForAction } from 
 import { fetchStableSupply } from './lib/stable-supply';
 import { executableDepthForToken } from './lib/liquidity-depth';
 import { computeStableHealth } from './lib/stable-health';
+import { assessStableHealth } from './lib/stable-assessment';
 import { computeFluidHealth } from './lib/fluidtokens-health';
 import fluidtokens from './adapters/fluidtokens';
 import { resolveFluidNetwork } from './lib/fluidtokens-config';
@@ -544,6 +545,30 @@ export = cds.service.impl(async function () {
       fetchLiquidityDepth: (tokenId) => executableDepthForToken(tokenId),
       log: (level, msg) => log[level]?.(`getStableHealth(${symbol}): ${msg}`),
     });
+  });
+
+  this.on('assessStable', async (req) => {
+    const symbol = (req.data as { symbol?: string })?.symbol;
+    if (!symbol) return req.error(400, 'symbol is required');
+
+    const meta = metadataForSymbol(symbol);
+    if (!meta) return req.error(400, `symbol '${symbol}' is not a registered stable (see STABLE_METADATA)`);
+    if (meta.peg !== 'USD') {
+      return req.error(501, `peg ${meta.peg} not yet supported by assessStable — USD only in Sprint 2`);
+    }
+
+    // Gather the full health block (same wiring as getStableHealth), then
+    // run the pure judgment layer over it. The verdict adds nothing to the
+    // fetch cost — it's pure derivation — so we always return `detail` too.
+    const detail = await computeStableHealth(meta, {
+      fanout,
+      attestationFanout,
+      fetchSupply: fetchStableSupply,
+      fetchLiquidityDepth: (tokenId) => executableDepthForToken(tokenId),
+      log: (level, msg) => log[level]?.(`assessStable(${symbol}): ${msg}`),
+    });
+
+    return { ...assessStableHealth(detail), detail };
   });
 
   this.on('getStableConvergence', async () => {

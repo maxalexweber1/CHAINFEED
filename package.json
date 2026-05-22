@@ -8,11 +8,13 @@
     "node": ">=20"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "@odatano/core": "^1.7.10",
     "@odatano/watch": "^0.1.8",
     "@odatano/x402": "^0.3.1",
     "@sap/cds": "^9",
-    "express": "^4"
+    "express": "^4",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@cap-js/cds-types": "^0.16.0",
@@ -36,6 +38,8 @@
     "check-no-js": "node -e \"const r=require('child_process').execSync('git ls-files srv scripts',{encoding:'utf8'}).split('\\n').filter(f=>/^(srv|scripts)\\/.+\\.js$/.test(f));if(r.length){console.error('TS-only policy: forbidden .js files:\\n'+r.join('\\n'));process.exit(1)}\"",
     "test": "echo \"no tests yet\" && exit 0",
     "smoke": "tsx scripts/smoke-all.ts",
+    "mcp": "cross-env NODE_OPTIONS=\"--import tsx\" node srv/mcp/server.ts",
+    "mcp:http": "cross-env NODE_OPTIONS=\"--import tsx\" node srv/mcp/http.ts",
     "aiken:build": "cd contracts && aiken check && aiken build",
     "demo:aiken": "node --import tsx scripts/demo-aiken-flow.ts",
     "lint": "eslint .",

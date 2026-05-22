@@ -21,7 +21,7 @@ The differentiation is **trust-by-construction**: every quote ships with its on-
 
 Full endpoint reference: **[`docs/API.md`](docs/API.md)**.
 
-Quick taste:
+Quick taste:hi 
 
 ```bash
 curl -X POST https://chainfeed.io/odata/v4/price/getBestPrice \
@@ -30,6 +30,31 @@ curl -X POST https://chainfeed.io/odata/v4/price/getBestPrice \
 ```
 
 Free reads (stable health, OHLCV, lending markets, service status). Paid reads gated by x402 USDM (price queries 0.01, audit packs 0.05). Webhook subscriptions for peg-break alerts.
+
+## MCP (for agents)
+
+CHAINFEED ships an MCP server so agents call it as native tools instead of hand-wiring HTTP. It's a thin facade over the OData endpoints (`srv/mcp/`) — start the service (`npm run dev`) or point `CHAINFEED_BASE_URL` at a deployed instance, then run a transport:
+
+```bash
+npm run mcp        # stdio — for Claude Code / Claude Desktop
+npm run mcp:http   # streamable HTTP on :4005 — for remote agents
+```
+
+Curated tool set: `assess_stable` (verdict + reasons + suggested actions — the one to reach for first), `get_stable_health`, `get_best_price`, `get_stable_convergence`, `get_arbitrage`, `get_ohlcv`, `get_lending_health`, `get_service_status`. x402-gated tools return a structured `paymentRequired` result carrying the `buildPaymentTx` handoff, so a wallet-equipped agent can pay and retry.
+
+Register the stdio server with Claude Code (`.mcp.json`):
+
+```json
+{
+  "mcpServers": {
+    "chainfeed": {
+      "command": "npm",
+      "args": ["run", "mcp"],
+      "env": { "CHAINFEED_BASE_URL": "http://localhost:4004" }
+    }
+  }
+}
+```
 
 ## Coverage
 
