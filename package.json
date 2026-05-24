@@ -14,6 +14,8 @@
     "@odatano/x402": "^0.3.1",
     "@sap/cds": "^9",
     "express": "^4",
+    "ink": "^5.2.1",
+    "react": "^18.3.1",
     "zod": "^4.4.3"
   },
   "devDependencies": {
@@ -22,6 +24,7 @@
     "@sap/cds-dk": "^9",
     "@types/express": "^5.0.6",
     "@types/node": "^25.6.0",
+    "@types/react": "^18.3.29",
     "bip39": "^3.1.0",
     "cross-env": "^10.1.0",
     "tsx": "^4.21.0",
@@ -40,6 +43,7 @@
     "smoke": "tsx scripts/smoke-all.ts",
     "mcp": "cross-env NODE_OPTIONS=\"--import tsx\" node srv/mcp/server.ts",
     "mcp:http": "cross-env NODE_OPTIONS=\"--import tsx\" node srv/mcp/http.ts",
+    "agent:dashboard": "tsx agents/dashboard/index.tsx",
     "aiken:build": "cd contracts && aiken check && aiken build",
     "demo:aiken": "node --import tsx scripts/demo-aiken-flow.ts",
     "lint": "eslint .",

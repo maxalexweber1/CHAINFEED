@@ -11,6 +11,7 @@
     "allowJs": false,
     "checkJs": false,
     "noUncheckedIndexedAccess": true,
+    "jsx": "react-jsx",
     "outDir": "dist",
     "rootDir": ".",
     "resolveJsonModule": true,
@@ -18,6 +19,6 @@
       "@sap/cds": ["./node_modules/@cap-js/cds-types"]
     }
   },
-  "include": ["srv/**/*", "scripts/**/*"],
+  "include": ["srv/**/*", "scripts/**/*", "agents/**/*"],
   "exclude": ["node_modules", "dist", "gen", "_out", "@cds-models"]
 }

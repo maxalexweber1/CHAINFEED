@@ -1,0 +1,4 @@
+{
+  "_comment": "Scoped ESM context for the demo agents. The CHAINFEED root stays CJS (CAP + tsx + `export =` patterns rely on it), but ink's transitive dep yoga-layout uses top-level await, which only works in ESM. Node respects the nearest package.json, so this file flips agents/** to module:true without touching the rest of the repo.",
+  "type": "module"
+}
