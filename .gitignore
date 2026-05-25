@@ -37,13 +37,18 @@ mta_archives/
 dist/
 *.tsbuildinfo
 
-# Local secrets — NEVER commit
+# Local secrets — NEVER commit. Whitelist the .env.example template so the
+# structure stays documented in git while actual filled-in files stay local.
 .env
-.env.local
-.env.*.local
+.env.*
+!.env.example
 *.mnemonic
 .claude
 .vscode
+
+# Watcher runtime state — restart-safe but per-environment, never commit
+agents/watcher/state.json
+agents/watcher/state.json.tmp
 
 
 CLAUDE.MD
@@ -55,3 +60,16 @@ AGENTS.md
 db*
 
 docs/upstream-bugs*
+
+# ── Deployment infra — HELD BACK until first verified Contabo deploy ─────
+# These files exist in the working tree (docker compose etc. still uses them)
+# but stay out of git until we've proven the stack end-to-end live. When the
+# deploy is green, delete this whole block to expose them in a single commit.
+# (CI workflow .github/workflows/test.yml is NOT held — it's useful immediately.)
+Dockerfile
+docker-compose.yml
+Caddyfile
+.dockerignore
+.env.prod.example
+docs/DEPLOYMENT.md
+scripts/bootstrap-contabo.sh

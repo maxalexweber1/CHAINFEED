@@ -1,0 +1,47 @@
+name: Tests
+
+# Runs on every push to main + every PR targeting main. Also manually
+# triggerable from the Actions tab via workflow_dispatch.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# Cancel in-progress runs on the same ref when new commits land — saves
+# CI minutes when force-pushing rapidly to a PR branch.
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Typecheck + Unit Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          # `cache: npm` keys on package-lock.json — restore cuts ~1min off
+          # the install step compared to a cold npm ci.
+          cache: 'npm'
+
+      - name: Install dependencies (npm ci, lockfile-frozen)
+        run: npm ci
+
+      - name: TypeScript check (tsc --noEmit, strict mode)
+        run: npm run typecheck
+
+      - name: TS-only file policy (no .js under srv/ or scripts/)
+        run: npm run check-no-js
+
+      # Runs all scripts/test-*.ts in parallel via scripts/test-all-unit.ts.
+      # As of 2026-05-25: 30 files, 475 assertions, ~30s total when warm.
+      - name: Unit tests
+        run: npm run test:unit
