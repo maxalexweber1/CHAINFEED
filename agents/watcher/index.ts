@@ -22,26 +22,32 @@ import path from 'node:path';
 import { connectMcp, type ChainfeedClient } from '../shared/chainfeed-client.js';
 import { runPollLoop } from '../shared/poll-loop.js';
 import { STABLE_SYMBOLS, type AssessmentResponse, type StableSymbol } from '../shared/types.js';
+import { getLogger } from '../shared/log.js';
 import { loadState, saveState, type StateFile } from './state.js';
 import { diffObservation, observationFromAssessment } from './diff.js';
+import { writeHeartbeat } from './heartbeat.js';
 import { stdoutSink } from './sinks/stdout.js';
 import { makeDiscordSink } from './sinks/discord.js';
 import { makeTelegramSink } from './sinks/telegram.js';
 import type { AlertEvent, Sink } from './sinks/types.js';
 
+const log = getLogger('watcher');
+
 interface WatcherConfig {
   mcpUrl: string;
   stateFile: string;
+  heartbeatFile: string;
   intervalMs: number;
   runOnce: boolean;
 }
 
 function readConfig(): WatcherConfig {
   return {
-    mcpUrl:     process.env.MCP_URL              ?? 'http://localhost:4005/mcp',
-    stateFile:  process.env.WATCHER_STATE_FILE   ?? path.resolve('agents/watcher/state.json'),
-    intervalMs: Number(process.env.WATCHER_INTERVAL_MS ?? 60_000),
-    runOnce:    !!process.env.WATCHER_ONCE,
+    mcpUrl:        process.env.MCP_URL                ?? 'http://localhost:4005/mcp',
+    stateFile:     process.env.WATCHER_STATE_FILE     ?? path.resolve('agents/watcher/state.json'),
+    heartbeatFile: process.env.WATCHER_HEARTBEAT_FILE ?? path.resolve('agents/watcher/heartbeat.json'),
+    intervalMs:    Number(process.env.WATCHER_INTERVAL_MS ?? 60_000),
+    runOnce:       !!process.env.WATCHER_ONCE,
   };
 }
 
@@ -65,7 +71,13 @@ function resolveSinks(): Sink[] {
 }
 
 /** One poll-tick: fetch all 5 stables in parallel, diff vs state, fire sinks, persist. */
-async function tick(client: ChainfeedClient, state: StateFile, sinks: Sink[], stateFile: string): Promise<void> {
+async function tick(
+  client: ChainfeedClient,
+  state: StateFile,
+  sinks: Sink[],
+  cfg: WatcherConfig,
+): Promise<void> {
+  const tickStartedAt = new Date();
   const results = await Promise.allSettled(
     STABLE_SYMBOLS.map((sym) => client.assessStable(sym).then((r) => [sym, r] as const)),
   );
@@ -77,7 +89,7 @@ async function tick(client: ChainfeedClient, state: StateFile, sinks: Sink[], st
   for (const r of results) {
     if (r.status === 'rejected') {
       errCount++;
-      process.stderr.write(`watcher: assess_stable failed: ${(r.reason as Error)?.message ?? r.reason}\n`);
+      log.warn({ err: (r.reason as Error)?.message ?? String(r.reason) }, 'assess_stable failed');
       continue;
     }
     okCount++;
@@ -91,22 +103,32 @@ async function tick(client: ChainfeedClient, state: StateFile, sinks: Sink[], st
   const sinkResults = await Promise.allSettled(sinks.map((s) => s.notify(events)));
   sinkResults.forEach((res, i) => {
     if (res.status === 'rejected') {
-      process.stderr.write(`watcher: sink '${sinks[i]!.name}' failed: ${(res.reason as Error)?.message ?? res.reason}\n`);
+      log.error(
+        { sink: sinks[i]!.name, err: (res.reason as Error)?.message ?? String(res.reason) },
+        'sink notify failed',
+      );
     }
   });
 
   // Persist after sinks ran. If a sink throws but state wrote, we'd miss
   // re-firing on restart — acceptable: sinks are best-effort, state is truth.
   try {
-    await saveState(stateFile, state);
+    await saveState(cfg.stateFile, state);
   } catch (e) {
-    process.stderr.write(`watcher: failed to persist state: ${(e as Error)?.message ?? e}\n`);
+    log.error({ err: (e as Error)?.message ?? String(e) }, 'failed to persist state');
   }
 
-  const ts = new Date().toISOString();
-  process.stderr.write(
-    `[${ts}] tick: ${okCount} polled, ${errCount} errors, ${events.length} alert${events.length === 1 ? '' : 's'}\n`,
-  );
+  // Heartbeat — written even on partial failure (errCount > 0) so the
+  // health endpoint sees the watcher as alive but degraded, not as missing.
+  await writeHeartbeat(cfg.heartbeatFile, {
+    tickAt:     tickStartedAt.toISOString(),
+    polled:     okCount,
+    errors:     errCount,
+    alerts:     events.length,
+    intervalMs: cfg.intervalMs,
+  });
+
+  log.info({ polled: okCount, errors: errCount, alerts: events.length }, 'tick');
 }
 
 async function main(): Promise<void> {
@@ -115,22 +137,25 @@ async function main(): Promise<void> {
   const state = await loadState(cfg.stateFile);
   const seeded = Object.keys(state.observations).length;
 
-  process.stderr.write(
-    `chainfeed-watcher: starting\n` +
-    `  mcp:      ${cfg.mcpUrl}\n` +
-    `  state:    ${cfg.stateFile} (${seeded} prior observation${seeded === 1 ? '' : 's'})\n` +
-    `  sinks:    ${sinks.map((s) => s.name).join(', ')}\n` +
-    `  interval: ${cfg.intervalMs}ms${cfg.runOnce ? ' (once)' : ''}\n`,
+  log.info(
+    {
+      mcp:        cfg.mcpUrl,
+      stateFile:  cfg.stateFile,
+      seeded,
+      sinks:      sinks.map((s) => s.name),
+      intervalMs: cfg.intervalMs,
+      runOnce:    cfg.runOnce,
+    },
+    'starting',
   );
 
   let client: ChainfeedClient;
   try {
     client = await connectMcp({ url: cfg.mcpUrl, clientName: 'chainfeed-watcher' });
   } catch (e) {
-    process.stderr.write(
-      `chainfeed-watcher: failed to connect to MCP at ${cfg.mcpUrl}\n` +
-      `  → ${(e as Error)?.message ?? e}\n` +
-      `  → Is the CHAINFEED MCP HTTP server running? Try: npm run mcp:http\n`,
+    log.fatal(
+      { mcp: cfg.mcpUrl, err: (e as Error)?.message ?? String(e) },
+      'failed to connect to MCP — is the CHAINFEED MCP HTTP server running? (npm run mcp:http)',
     );
     process.exit(1);
   }
@@ -138,7 +163,7 @@ async function main(): Promise<void> {
   // SIGINT/SIGTERM → save state, close client, exit.
   const ac = new AbortController();
   const shutdown = async (sig: NodeJS.Signals) => {
-    process.stderr.write(`chainfeed-watcher: ${sig} received, shutting down\n`);
+    log.info({ signal: sig }, 'shutdown requested');
     ac.abort();
     try { await saveState(cfg.stateFile, state); } catch { /* best-effort */ }
     try { await client.close();                  } catch { /* best-effort */ }
@@ -148,7 +173,7 @@ async function main(): Promise<void> {
   process.once('SIGTERM', () => void shutdown('SIGTERM'));
 
   if (cfg.runOnce) {
-    await tick(client, state, sinks, cfg.stateFile);
+    await tick(client, state, sinks, cfg);
     await client.close();
     return;
   }
@@ -156,14 +181,14 @@ async function main(): Promise<void> {
   await runPollLoop({
     intervalMs: cfg.intervalMs,
     signal: ac.signal,
-    onTick: () => tick(client, state, sinks, cfg.stateFile),
+    onTick: () => tick(client, state, sinks, cfg),
     onError: (err, fails) => {
-      process.stderr.write(`watcher: tick failed (consecutive=${fails}): ${err.message}\n`);
+      log.error({ consecutive: fails, err: err.message }, 'tick failed');
     },
   });
 }
 
 void main().catch((e) => {
-  process.stderr.write(`chainfeed-watcher: fatal: ${(e as Error)?.stack ?? e}\n`);
+  log.fatal({ err: (e as Error)?.stack ?? String(e) }, 'fatal');
   process.exit(1);
 });

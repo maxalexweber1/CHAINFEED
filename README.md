@@ -42,6 +42,16 @@ npm run mcp:http   # streamable HTTP on :4005 — for remote agents
 
 Curated tool set: `assess_stable` (verdict + reasons + suggested actions — the one to reach for first), `get_stable_health`, `get_best_price`, `get_stable_convergence`, `get_arbitrage`, `get_ohlcv`, `get_lending_health`, `get_service_status`. x402-gated tools return a structured `paymentRequired` result carrying the `buildPaymentTx` handoff, so a wallet-equipped agent can pay and retry.
 
+Three reference agents ship in `agents/`:
+
+```bash
+npm run agent:qa         # natural-language Q&A REPL (Claude API + tool-use loop)
+npm run agent:dashboard  # live terminal dashboard (ink)
+npm run agent:watcher    # Discord + Telegram peg-break sink, runs in the background
+```
+
+Full walkthrough & tool catalog, integration pattern for building your own agent, MCP transport choice, x402 handling: [`docs/AGENT_GUIDE.md`](docs/AGENT_GUIDE.md).
+
 Register the stdio server with Claude Code (`.mcp.json`):
 
 ```json
@@ -50,7 +60,7 @@ Register the stdio server with Claude Code (`.mcp.json`):
     "chainfeed": {
       "command": "npm",
       "args": ["run", "mcp"],
-      "env": { "CHAINFEED_BASE_URL": "http://localhost:4004" }
+      "env": { "CHAINFEED_BASE_URL": "http://127.0.0.1:4004" }
     }
   }
 }

@@ -19,6 +19,9 @@ import express, { type Request, type Response } from 'express';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { buildServer } from './server';
 import { makeContext, type ChainfeedToolContext } from './tools';
+import { getLogger } from '../lib/log';
+
+const log = getLogger('mcp:http');
 
 const jsonRpcError = (code: number, message: string) => ({
   jsonrpc: '2.0' as const,
@@ -47,7 +50,7 @@ export function createMcpHttpApp(ctx: ChainfeedToolContext = makeContext()) {
       await server.connect(transport);
       await transport.handleRequest(req, res, req.body);
     } catch (e) {
-      process.stderr.write(`mcp/http request failed: ${(e as Error)?.stack ?? e}\n`);
+      log.error({ err: (e as Error)?.stack ?? String(e) }, 'request failed');
       if (!res.headersSent) res.status(500).json(jsonRpcError(-32603, 'internal error'));
     }
   });
@@ -67,13 +70,13 @@ async function main(): Promise<void> {
   const port = Number(process.env.MCP_HTTP_PORT ?? 4005);
   const app = createMcpHttpApp(ctx);
   app.listen(port, () => {
-    process.stderr.write(`chainfeed MCP server ready on http://localhost:${port}/mcp — base=${ctx.baseUrl}\n`);
+    log.info({ port, base: ctx.baseUrl }, 'MCP HTTP server ready');
   });
 }
 
 if (require.main === module) {
   main().catch((e) => {
-    process.stderr.write(`chainfeed MCP HTTP server failed to start: ${(e as Error)?.stack ?? e}\n`);
+    log.fatal({ err: (e as Error)?.stack ?? String(e) }, 'MCP HTTP server failed to start');
     process.exit(1);
   });
 }

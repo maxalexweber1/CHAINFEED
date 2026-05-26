@@ -4,6 +4,8 @@ OData V4 service at `/odata/v4/price/`. JSON responses, POST for actions, GET fo
 
 Free endpoints are public. **Paid endpoints** are gated by [x402](https://www.x402.org) USDM micropayments — see [Payment](#payment) below.
 
+> **Agents** consume this surface via MCP (Model Context Protocol), not raw OData. See [`docs/AGENTS.md`](AGENTS.md) for the MCP server, tool catalog, and three reference agents.
+
 ---
 
 ## Quick reference
@@ -16,6 +18,7 @@ Free endpoints are public. **Paid endpoints** are gated by [x402](https://www.x4
 | [`POST /getTWAP`](#post-gettwap) | Action | 20 000 / 0.02 |
 | [`POST /getArbitrageOpportunities`](#post-getarbitrageopportunities) | Action | 50 000 / 0.05 |
 | [`POST /getAuditPack`](#post-getauditpack) | Action | 50 000 / 0.05 |
+| [`POST /assessStable`](#post-assessstable) | Action | free |
 | [`POST /getStableHealth`](#post-getstablehealth) | Action | free |
 | [`POST /getStableConvergence`](#post-getstableconvergence) | Action | free |
 | [`POST /getOhlcv`](#post-getohlcv) | Action | free |
@@ -28,6 +31,7 @@ Free endpoints are public. **Paid endpoints** are gated by [x402](https://www.x4
 | [`POST /cancelSubscription`](#post-cancelsubscription) | Action | free |
 | [`POST /getServiceStatus`](#post-getservicestatus) | Action | free |
 | [`POST /buildPaymentTx`](#post-buildpaymenttx) | Action | free |
+| [`GET /health`](#get-health) | Express (not OData) | free |
 | `GET /$metadata` | OData schema | free |
 
 ---
@@ -85,6 +89,32 @@ Best-buy / best-sell DEX with spread%. Oracles excluded — only routable venues
 ---
 
 ## Stable health
+
+### `POST /assessStable`
+
+Actionable **verdict** layer on top of `getStableHealth`. Collapses the full health block into one of three string-stable verdicts plus the reasons behind it and suggested next actions — so a consumer (especially an LLM agent) doesn't re-derive thresholds.
+
+**Body**: `{ "symbol": "USDM" }` (`USDM` | `DJED` | `iUSD` | `USDA` | `USDCx`)
+
+**Returns**:
+```json
+{
+  "symbol": "USDM",
+  "verdict": "caution",
+  "headline": "USDM: 0.20% above peg; reserves on-chain-attestation, 19d old; 5 price sources.",
+  "reasonCodes": ["attestation-stale"],
+  "reasons":     ["Reserves attestation is more than 7 days old."],
+  "suggestedActions": ["verify-reserves-manually", "monitor"],
+  "assessmentConfidence": 0.9994,
+  "riskScore":           0.6983,
+  "computedAt":          "2026-05-26T14:23:01Z",
+  "detail":              { /* full StableHealthResult */ }
+}
+```
+
+`verdict` is one of `ok` | `caution` | `alert`. `reasonCodes` are string-stable IDs (`peg-deviation-critical`, `attestation-stale`, …) so consumers can branch without parsing prose. `assessmentConfidence` is trust in **this verdict** (driven by data completeness); `riskScore` is health of the **stable itself**.
+
+USD-pegged stables only for now — `peg=EUR` etc. return 501.
 
 ### `POST /getStableHealth`
 
@@ -199,6 +229,27 @@ Build an unsigned x402 payment tx for any gated action. Free — buyer pays for 
 **Body**: `{ "buyerAddrBech32": "addr1...", "gatedAction": "getBestPrice" }`
 
 Returns base64 unsigned CBOR + amount + receiver.
+
+### `GET /health`
+
+**Not OData.** Top-level Express endpoint for uptime monitors (BetterStack, Pingdom, etc.). Semantic check — DB ping, adapter cache snapshot, watcher heartbeat age — composed by `srv/lib/health.ts`.
+
+**Returns**:
+```json
+{
+  "status":    "healthy",         // healthy | degraded | critical
+  "timestamp": "2026-05-26T14:23:01Z",
+  "uptimeSec": 3600,
+  "version":   "0.0.1",
+  "checks": {
+    "db":       { "status": "ok",       "latencyMs": 1 },
+    "adapters": { "status": "ok",       "ok": 5, "degraded": 0, "cold": 7, "total": 12, "byAdapter": { … } },
+    "watcher":  { "status": "ok",       "lastTickAt": "2026-05-26T14:22:55Z", "ageMs": 6000, "intervalMs": 60000 }
+  }
+}
+```
+
+HTTP mapping: **200** for `healthy` + `degraded` (uptime monitor stays green); **503** for `critical` (monitor pages on-call). `unknown` checks (no heartbeat file, all adapters cold) don't penalise the overall status.
 
 ---
 

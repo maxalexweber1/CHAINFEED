@@ -14,6 +14,9 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import type { Verdict } from '../shared/types.js';
+import { getLogger } from '../shared/log.js';
+
+const log = getLogger('watcher:state');
 
 export interface Observation {
   verdict: Verdict;
@@ -43,14 +46,14 @@ export async function loadState(filePath: string): Promise<StateFile> {
     const raw = await fs.readFile(filePath, 'utf8');
     const parsed = JSON.parse(raw) as Partial<StateFile>;
     if (parsed.version !== 1 || !parsed.observations) {
-      process.stderr.write(`watcher: state file ${filePath} has unexpected shape, starting empty\n`);
+      log.warn({ path: filePath }, 'state file has unexpected shape, starting empty');
       return { ...EMPTY_STATE };
     }
     return { version: 1, observations: { ...parsed.observations } };
   } catch (e) {
     const err = e as NodeJS.ErrnoException;
     if (err.code === 'ENOENT') return { ...EMPTY_STATE };
-    process.stderr.write(`watcher: failed to read state ${filePath}: ${err.message} — starting empty\n`);
+    log.warn({ path: filePath, err: err.message }, 'failed to read state, starting empty');
     return { ...EMPTY_STATE };
   }
 }

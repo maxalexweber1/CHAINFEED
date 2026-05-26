@@ -79,26 +79,30 @@ await t('different pairs cache independently', async () => {
 });
 
 await t('stale (TTL ≤ age < 2*TTL) returns cached + triggers bg refresh', async () => {
+  // Margins enlarged 2026-05-26 — the original 50/80/100 trio was flaky under
+  // the parallel test runner (30 tsx procs at once). 200/300/400 gives ~50ms
+  // headroom on both edges before a timer-late blows up the assertion.
   const stub = makeStubAdapter();
-  const cached = withCache(stub, { ttlMs: 50 });
+  const cached = withCache(stub, { ttlMs: 200 });
   const q1 = await cached.getPrice('A');
   assert.equal(stub.callCount(), 1);
 
-  await sleep(80);  // 80 > 50 (stale), 80 < 100 (within 2*TTL)
+  await sleep(300);  // 300 > 200 (stale), 300 < 400 (within 2*TTL)
   const q2 = await cached.getPrice('A');
   // Stale read returns the prior quote synchronously (no upstream wait)
   assert.equal((q2.rawPayload as { calls: number }).calls, 1);
 
   // Background refresh should have fired — give it a moment
-  await sleep(50);
+  await sleep(100);
   assert.equal(stub.callCount(), 2);
 });
 
 await t('very stale (age ≥ 2*TTL) blocks on refresh', async () => {
+  // Margins enlarged for parallel-runner robustness (see above).
   const stub = makeStubAdapter();
-  const cached = withCache(stub, { ttlMs: 30 });
+  const cached = withCache(stub, { ttlMs: 100 });
   await cached.getPrice('A');
-  await sleep(80);  // > 2 * 30
+  await sleep(250);  // > 2 * 100
   const q = await cached.getPrice('A');
   assert.equal(stub.callCount(), 2);
   assert.equal((q.rawPayload as { calls: number }).calls, 2, 'should be the fresh quote, not the stale one');

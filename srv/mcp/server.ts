@@ -15,6 +15,9 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { CHAINFEED_TOOLS, makeContext, type ToolRunResult } from './tools';
+import { getLogger } from '../lib/log';
+
+const log = getLogger('mcp:stdio');
 
 /** Shape a ToolRunResult into an MCP CallToolResult. */
 export function toMcpResult(r: ToolRunResult): {
@@ -50,15 +53,13 @@ async function main(): Promise<void> {
   const server = buildServer(ctx);
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  process.stderr.write(
-    `chainfeed MCP server ready on stdio — ${CHAINFEED_TOOLS.length} tools, base=${ctx.baseUrl}\n`,
-  );
+  log.info({ tools: CHAINFEED_TOOLS.length, base: ctx.baseUrl }, 'MCP server ready on stdio');
 }
 
 // Only auto-start when run directly (not when imported by tests).
 if (require.main === module) {
   main().catch((e) => {
-    process.stderr.write(`chainfeed MCP server failed to start: ${(e as Error)?.stack ?? e}\n`);
+    log.fatal({ err: (e as Error)?.stack ?? String(e) }, 'MCP server failed to start');
     process.exit(1);
   });
 }
