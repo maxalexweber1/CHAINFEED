@@ -86,7 +86,7 @@ t('SUBSCRIPTION_ACTION_PATHS covers write-side endpoints', () => {
 });
 
 t('no path appears in BOTH the expensive and subscription buckets', () => {
-  const exp = new Set(EXPENSIVE_ACTION_PATHS);
+  const exp = new Set<string>(EXPENSIVE_ACTION_PATHS);
   for (const p of SUBSCRIPTION_ACTION_PATHS) {
     assert.ok(!exp.has(p), `path ${p} double-bucketed — last app.use() wins, intent ambiguous`);
   }
