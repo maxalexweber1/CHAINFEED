@@ -17,6 +17,13 @@ import { assertNetworkConsistency } from './x402-config';
 import { assertEncryptionConfigured } from './lib/secret-crypto';
 import { buildHealthReport, defaultReadHeartbeat } from './lib/health';
 import { getRegistryStatus } from './adapters/registry';
+import {
+  globalLimiter,
+  expensiveLimiter,
+  subscriptionLimiter,
+  EXPENSIVE_ACTION_PATHS,
+  SUBSCRIPTION_ACTION_PATHS,
+} from './lib/rate-limit';
 
 const log = cds.log('chainfeed');
 
@@ -56,12 +63,29 @@ const HEARTBEAT_FILE = process.env.WATCHER_HEARTBEAT_FILE
     }
   });
 
-// ── /health endpoint ──────────────────────────────────────────────────
-// Top-level express handler (NOT an OData action) so uptime monitors can
-// hit a clean GET /health. Returns 200 for healthy + degraded, 503 for
-// critical — so monitors page on real outages but not partial dimming.
+// ── Bootstrap-time middleware: trust-proxy + rate-limiting + /health ──
+// `cds.on('bootstrap')` runs BEFORE CAP mounts the service routes, so any
+// `app.use()` calls here apply ahead of /odata/* handlers — meaning the
+// rate-limiter rejects floods before they reach a fanout-heavy action.
+//
+// Order matters:
+//   1. trust proxy   → express reads X-Forwarded-For from Caddy so per-IP
+//                      limits key on the real client, not the proxy.
+//   2. expensiveLim. → tight 10/min/IP on fanout-heavy actions.
+//   3. subscriptLim. → 5/min/IP on DB-write actions (peg alert subscribe).
+//   4. globalLim.    → 60/min/IP catch-all for the rest of /odata/*.
+//   5. /health       → registered AFTER limiters so its `skip()` doesn't
+//                      need to compete for ordering. Verified by integration
+//                      smoke that /health stays unlimited.
 (cds as unknown as { on(ev: string, handler: (app: import('express').Express) => void): void })
   .on('bootstrap', (app) => {
+    // One hop ahead (Caddy) — trust X-Forwarded-For from exactly one proxy.
+    app.set('trust proxy', 1);
+
+    for (const p of EXPENSIVE_ACTION_PATHS)    app.use(p, expensiveLimiter);
+    for (const p of SUBSCRIPTION_ACTION_PATHS) app.use(p, subscriptionLimiter);
+    app.use('/odata',                                 globalLimiter);
+
     app.get('/health', async (_req, res) => {
       try {
         const report = await buildHealthReport({
@@ -86,3 +110,5 @@ const HEARTBEAT_FILE = process.env.WATCHER_HEARTBEAT_FILE
       }
     });
   });
+// (closing wraps both the /health handler AND the rate-limit `app.use()` calls
+// above — they're all inside the same single `on('bootstrap', app => { ... })`.)

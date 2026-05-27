@@ -225,6 +225,78 @@ t('validateWebhookUrl: rejects malformed', () => {
   assert.throws(() => validateWebhookUrl(''),          /not a valid URL/);
 });
 
+// ── SSRF prevention (production mode only) ──────────────────────────
+// In production, private/loopback/link-local hosts must be rejected to
+// prevent an attacker from `subscribePegAlert`-ing a webhook pointed at
+// our own internal services (10.x, 127.x, etc.) to probe them from outside.
+
+function withProdEnv(fn: () => void): void {
+  const prev = process.env.NODE_ENV;
+  process.env.NODE_ENV = 'production';
+  try { fn(); }
+  finally { process.env.NODE_ENV = prev; }
+}
+
+t('validateWebhookUrl (prod): rejects localhost http', () => {
+  withProdEnv(() => {
+    assert.throws(() => validateWebhookUrl('http://localhost:3000/hook'), /private or internal/);
+    assert.throws(() => validateWebhookUrl('https://localhost/hook'),     /private or internal/);
+  });
+});
+
+t('validateWebhookUrl (prod): rejects 127.x loopback', () => {
+  withProdEnv(() => {
+    assert.throws(() => validateWebhookUrl('https://127.0.0.1/hook'),     /private or internal/);
+    assert.throws(() => validateWebhookUrl('https://127.5.6.7:8080/hook'), /private or internal/);
+  });
+});
+
+t('validateWebhookUrl (prod): rejects RFC1918 ranges (10.x, 172.16-31.x, 192.168.x)', () => {
+  withProdEnv(() => {
+    assert.throws(() => validateWebhookUrl('https://10.0.0.1/hook'),    /private or internal/);
+    assert.throws(() => validateWebhookUrl('https://10.255.255.255/h'), /private or internal/);
+    assert.throws(() => validateWebhookUrl('https://172.16.0.1/hook'),  /private or internal/);
+    assert.throws(() => validateWebhookUrl('https://172.31.255.255/h'), /private or internal/);
+    assert.throws(() => validateWebhookUrl('https://192.168.1.1/hook'), /private or internal/);
+  });
+});
+
+t('validateWebhookUrl (prod): rejects link-local + any-IPv4', () => {
+  withProdEnv(() => {
+    assert.throws(() => validateWebhookUrl('https://169.254.169.254/'), /private or internal/);
+    assert.throws(() => validateWebhookUrl('https://0.0.0.0/'),         /private or internal/);
+  });
+});
+
+t('validateWebhookUrl (prod): rejects IPv6 loopback + link-local + ULA', () => {
+  withProdEnv(() => {
+    assert.throws(() => validateWebhookUrl('https://[::1]/hook'),       /private or internal/);
+    assert.throws(() => validateWebhookUrl('https://[fc00::1]/hook'),   /private or internal/);
+    assert.throws(() => validateWebhookUrl('https://[fd00::1]/hook'),   /private or internal/);
+    assert.throws(() => validateWebhookUrl('https://[fe80::1]/hook'),   /private or internal/);
+  });
+});
+
+t('validateWebhookUrl (prod): does NOT reject 172.15.x or 172.32.x (outside RFC1918 B range)', () => {
+  withProdEnv(() => {
+    // These are public IPs that happen to look 172.x — must NOT be blocked.
+    assert.equal(validateWebhookUrl('https://172.15.0.1/hook'), 'https://172.15.0.1/hook');
+    assert.equal(validateWebhookUrl('https://172.32.0.1/hook'), 'https://172.32.0.1/hook');
+  });
+});
+
+t('validateWebhookUrl (prod): public hosts still pass', () => {
+  withProdEnv(() => {
+    assert.equal(validateWebhookUrl('https://example.com/hook'),       'https://example.com/hook');
+    assert.equal(validateWebhookUrl('https://api.discord.com/web/123'), 'https://api.discord.com/web/123');
+  });
+});
+
+t('validateWebhookUrl (dev): localhost still allowed (developer experience)', () => {
+  // No NODE_ENV=production set → SSRF check skipped, localhost stays usable.
+  assert.equal(validateWebhookUrl('http://localhost:3000/hook'), 'http://localhost:3000/hook');
+});
+
 // ── header constants stable ─────────────────────────────────────────
 t('header names are stable identifiers', () => {
   assert.equal(HMAC_SIGNATURE_HEADER, 'X-Chainfeed-Signature');

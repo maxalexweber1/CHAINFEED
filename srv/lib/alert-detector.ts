@@ -172,9 +172,44 @@ export function generateHmacSecret(): string {
 }
 
 /**
- * Validate a webhook URL: must be https (allow http for localhost test
- * runs), parseable, no userinfo, no fragment. Returns the normalized URL
- * string or throws.
+ * Hostname patterns that resolve to private / loopback / link-local addresses.
+ * Used in production to reject SSRF attempts — an attacker could otherwise
+ * `subscribePegAlert` with webhookUrl=http://10.0.0.1:4004/odata/v4/... to
+ * probe internal services from outside the firewall.
+ *
+ * This is a literal-hostname check, not a DNS-resolution check (TOCTOU
+ * concerns plus latency cost). An attacker who points a public DNS name at a
+ * private IP would still pass this check — that's a documented limitation.
+ * For full SSRF safety, also restrict outbound network egress at the firewall
+ * (we don't today; the watcher worker fetches the webhook directly).
+ */
+const PRIVATE_HOST_PATTERNS: ReadonlyArray<RegExp> = [
+  /^localhost$/i,
+  /^127\./,                       // IPv4 loopback           (127.0.0.0/8)
+  /^10\./,                        // RFC1918 class A         (10.0.0.0/8)
+  /^172\.(1[6-9]|2\d|3[01])\./,   // RFC1918 class B         (172.16.0.0/12)
+  /^192\.168\./,                  // RFC1918 class C         (192.168.0.0/16)
+  /^169\.254\./,                  // IPv4 link-local         (169.254.0.0/16)
+  /^0\.0\.0\.0$/,                 // any-IPv4
+  /^\[?::1\]?$/,                  // IPv6 loopback
+  /^\[?fc[0-9a-f]{2}:/i,          // IPv6 unique local       (fc00::/7) — first byte fc/fd
+  /^\[?fd[0-9a-f]{2}:/i,
+  /^\[?fe[89ab][0-9a-f]:/i,       // IPv6 link-local         (fe80::/10)
+];
+
+function isPrivateHostLiteral(hostname: string): boolean {
+  // URL parser leaves IPv6 hostnames bracketed — strip for matching.
+  const h = hostname.startsWith('[') && hostname.endsWith(']')
+    ? hostname.slice(1, -1)
+    : hostname;
+  return PRIVATE_HOST_PATTERNS.some((rx) => rx.test(h));
+}
+
+/**
+ * Validate a webhook URL: must be https (allow http for localhost test runs),
+ * parseable, no userinfo, no fragment. In production (`NODE_ENV=production`)
+ * also rejects private/loopback/link-local hosts to prevent SSRF. Returns the
+ * normalized URL string or throws.
  */
 export function validateWebhookUrl(url: string): string {
   let parsed: URL;
@@ -188,6 +223,10 @@ export function validateWebhookUrl(url: string): string {
   }
   if (parsed.hash) {
     throw new Error('webhookUrl: must not contain a fragment');
+  }
+  if (process.env.NODE_ENV === 'production' && isPrivateHostLiteral(parsed.hostname)) {
+    // Generic message — don't leak which check tripped, helps fuzzers slightly less.
+    throw new Error('webhookUrl: private or internal hosts are not allowed');
   }
   return parsed.toString();
 }

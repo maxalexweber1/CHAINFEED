@@ -15,6 +15,7 @@
     "@odatano/x402": "^0.3.1",
     "@sap/cds": "^9",
     "express": "^4",
+    "express-rate-limit": "^8.5.2",
     "ink": "^5.2.1",
     "pino": "^10.3.1",
     "pino-pretty": "^13.1.3",
