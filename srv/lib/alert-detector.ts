@@ -197,7 +197,7 @@ const PRIVATE_HOST_PATTERNS: ReadonlyArray<RegExp> = [
   /^\[?fe[89ab][0-9a-f]:/i,       // IPv6 link-local         (fe80::/10)
 ];
 
-function isPrivateHostLiteral(hostname: string): boolean {
+export function isPrivateHostLiteral(hostname: string): boolean {
   // URL parser leaves IPv6 hostnames bracketed — strip for matching.
   const h = hostname.startsWith('[') && hostname.endsWith(']')
     ? hostname.slice(1, -1)

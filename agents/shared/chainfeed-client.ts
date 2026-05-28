@@ -34,6 +34,12 @@ export interface ConnectOptions {
   /** Identifier sent on the MCP `initialize` handshake. Mostly cosmetic. */
   clientName?: string;
   clientVersion?: string;
+  /**
+   * Bearer token sent as `Authorization: Bearer <token>` on every request.
+   * Must match the server's MCP_AUTH_TOKEN. Omit only against a dev server
+   * running without a token.
+   */
+  authToken?: string;
 }
 
 /** Connect to a running CHAINFEED MCP HTTP server and return a typed client. */
@@ -42,7 +48,12 @@ export async function connectMcp(opts: ConnectOptions): Promise<ChainfeedClient>
     name:    opts.clientName    ?? 'chainfeed-agent',
     version: opts.clientVersion ?? '0.0.1',
   });
-  const transport = new StreamableHTTPClientTransport(new URL(opts.url));
+  const transport = new StreamableHTTPClientTransport(
+    new URL(opts.url),
+    opts.authToken
+      ? { requestInit: { headers: { Authorization: `Bearer ${opts.authToken}` } } }
+      : undefined,
+  );
   await client.connect(transport);
 
   /**

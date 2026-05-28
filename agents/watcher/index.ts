@@ -151,7 +151,11 @@ async function main(): Promise<void> {
 
   let client: ChainfeedClient;
   try {
-    client = await connectMcp({ url: cfg.mcpUrl, clientName: 'chainfeed-watcher' });
+    client = await connectMcp({
+      url: cfg.mcpUrl,
+      clientName: 'chainfeed-watcher',
+      authToken: process.env.MCP_AUTH_TOKEN,
+    });
   } catch (e) {
     log.fatal(
       { mcp: cfg.mcpUrl, err: (e as Error)?.message ?? String(e) },

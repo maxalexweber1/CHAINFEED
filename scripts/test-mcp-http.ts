@@ -42,6 +42,10 @@ const fetchImpl: FetchLike = async (url) => {
 async function main() {
   console.log('mcp-http (e2e) ──────────────────────────────────────────');
 
+  // Determinism: the no-token app below falls back to MCP_AUTH_TOKEN from env.
+  // Clear it so an exported token in the dev shell can't flip these tests.
+  delete process.env.MCP_AUTH_TOKEN;
+
   const app = createMcpHttpApp(makeContext({ baseUrl: 'http://upstream.test', fetchImpl }));
   const server = app.listen(0);
   await new Promise<void>((r) => server.once('listening', () => r()));
@@ -86,6 +90,58 @@ async function main() {
     });
   } finally {
     await new Promise<void>((r) => server.close(() => r()));
+  }
+
+  // ── Bearer-auth gate ────────────────────────────────────────────────────
+  const TOKEN = 'test-secret-token-0123456789';
+  const authedApp = createMcpHttpApp(
+    makeContext({ baseUrl: 'http://upstream.test', fetchImpl }),
+    { authToken: TOKEN },
+  );
+  const authedServer = authedApp.listen(0);
+  await new Promise<void>((r) => authedServer.once('listening', () => r()));
+  const authedPort = (authedServer.address() as AddressInfo).port;
+  const authedBase = `http://127.0.0.1:${authedPort}`;
+  const authedUrl = new URL(`${authedBase}/mcp`);
+
+  try {
+    await t('rejects /mcp with no Authorization header → 401', async () => {
+      const res = await fetch(`${authedBase}/mcp`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ jsonrpc: '2.0', method: 'initialize', id: 1 }),
+      });
+      assert.equal(res.status, 401);
+    });
+
+    await t('rejects /mcp with a wrong bearer token → 401', async () => {
+      const res = await fetch(`${authedBase}/mcp`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: 'Bearer wrong-token' },
+        body: JSON.stringify({ jsonrpc: '2.0', method: 'initialize', id: 1 }),
+      });
+      assert.equal(res.status, 401);
+    });
+
+    await t('accepts /mcp with the correct bearer token (full MCP round-trip)', async () => {
+      const client = new Client({ name: 'test', version: '0.0.0' });
+      const transport = new StreamableHTTPClientTransport(authedUrl, {
+        requestInit: { headers: { Authorization: `Bearer ${TOKEN}` } },
+      });
+      await client.connect(transport);
+      const { tools } = await client.listTools();
+      assert.ok(tools.some((t) => t.name === 'assess_stable'));
+      await client.close();
+    });
+
+    await t('/healthz stays open without a token', async () => {
+      const res = await fetch(`${authedBase}/healthz`);
+      assert.equal(res.status, 200);
+      const body = await res.json() as { ok: boolean };
+      assert.equal(body.ok, true);
+    });
+  } finally {
+    await new Promise<void>((r) => authedServer.close(() => r()));
   }
 
   console.log(`\n${n - fails}/${n} passed`);

@@ -19,13 +19,19 @@
  * batch of follow-up questions in 10 seconds" vs "one IP making a script
  * call every 100ms". Adjust per-deploy by editing this file.
  *
- * Disabled (effectively no-op high limit) when `NODE_ENV !== 'production'`
- * so local dev with `npm run smoke` or the dashboard doesn't hit the wall.
+ * Enabled by default in every environment. Set `RATE_LIMIT_DISABLED=1` to
+ * raise every limiter to a no-op ceiling — intended for local dev (`npm run
+ * smoke`, the dashboard) and load tests. Gating on an explicit flag rather
+ * than `NODE_ENV` means a non-prod deploy that's still internet-reachable
+ * keeps real limits instead of silently running unbounded.
  */
 
 import rateLimit, { type RateLimitRequestHandler } from 'express-rate-limit';
 
-const isProduction = process.env.NODE_ENV === 'production';
+/** Explicit opt-out only — default is ENABLED so no environment is silently unlimited. */
+const limitsDisabled = /^(1|true|yes)$/i.test(process.env.RATE_LIMIT_DISABLED ?? '');
+/** No-op ceiling used when limits are explicitly disabled. */
+const NOOP_MAX = 100_000;
 
 /** Standard knobs shared across all our limiters. */
 const COMMON = {
@@ -38,23 +44,22 @@ const COMMON = {
 
 /**
  * Catches obvious flooding. Applies to the entire OData surface (read +
- * action routes). 60/min in prod = ~1/sec sustained, generous burst.
+ * action routes). 60/min = ~1/sec sustained, generous burst.
  */
 export const globalLimiter: RateLimitRequestHandler = rateLimit({
   ...COMMON,
-  max:     isProduction ? 60 : 1000,
+  max:     limitsDisabled ? NOOP_MAX : 60,
   message: { error: 'rate-limited: too many requests' },
 });
 
 /**
  * Heavyweight read endpoints — every call triggers fanout to all sources
- * for the relevant pair/stable. 10/min/IP in prod is plenty for a real
- * dashboard or chat-Q&A session while being too tight for cache-warming
- * scrape attacks.
+ * for the relevant pair/stable. 10/min/IP is plenty for a real dashboard or
+ * chat-Q&A session while being too tight for cache-warming scrape attacks.
  */
 export const expensiveLimiter: RateLimitRequestHandler = rateLimit({
   ...COMMON,
-  max:     isProduction ? 10 : 1000,
+  max:     limitsDisabled ? NOOP_MAX : 10,
   message: { error: 'rate-limited: this endpoint is heavyweight; back off' },
 });
 
@@ -65,7 +70,7 @@ export const expensiveLimiter: RateLimitRequestHandler = rateLimit({
  */
 export const subscriptionLimiter: RateLimitRequestHandler = rateLimit({
   ...COMMON,
-  max:     isProduction ? 5 : 1000,
+  max:     limitsDisabled ? NOOP_MAX : 5,
   message: { error: 'rate-limited: subscription writes are throttled' },
 });
 

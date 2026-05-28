@@ -19,7 +19,7 @@ async function main(): Promise<void> {
 
   let client;
   try {
-    client = await connectMcp({ url, clientName: 'chainfeed-dashboard' });
+    client = await connectMcp({ url, clientName: 'chainfeed-dashboard', authToken: process.env.MCP_AUTH_TOKEN });
   } catch (e) {
     process.stderr.write(
       `\nchainfeed-dashboard: failed to connect to MCP at ${url}\n` +

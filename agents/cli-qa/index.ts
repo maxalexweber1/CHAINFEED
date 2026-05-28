@@ -68,6 +68,7 @@ two sentences. Cite the tool you used in parentheses, e.g. "(via assess_stable)"
 
 interface CliConfig {
   mcpUrl: string;
+  mcpAuthToken?: string;
   apiKey: string;
   model: string;
 }
@@ -80,6 +81,7 @@ function readConfig(): CliConfig {
   }
   return {
     mcpUrl: process.env.MCP_URL ?? 'http://127.0.0.1:4005/mcp',
+    mcpAuthToken: process.env.MCP_AUTH_TOKEN,
     apiKey,
     model: MODEL,
   };
@@ -179,7 +181,12 @@ async function main(): Promise<void> {
 
   // Connect MCP
   const mcp = new McpClient({ name: 'chainfeed-cli-qa', version: '0.0.1' });
-  const transport = new StreamableHTTPClientTransport(new URL(cfg.mcpUrl));
+  const transport = new StreamableHTTPClientTransport(
+    new URL(cfg.mcpUrl),
+    cfg.mcpAuthToken
+      ? { requestInit: { headers: { Authorization: `Bearer ${cfg.mcpAuthToken}` } } }
+      : undefined,
+  );
   try {
     await mcp.connect(transport);
   } catch (e) {

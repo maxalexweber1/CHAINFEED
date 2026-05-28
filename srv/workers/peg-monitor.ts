@@ -26,6 +26,7 @@ import {
   type AlertWebhookPayload,
 } from '../lib/alert-detector';
 import { decryptSecret } from '../lib/secret-crypto';
+import { assertPublicEgress } from '../lib/webhook-egress';
 import { fanout } from '../adapters/registry';
 import { aggregate, pegDeviationBps } from '../aggregation';
 import { metadataForPair } from '../lib/stable-metadata';
@@ -110,6 +111,15 @@ async function fireWebhook(sub: SubscriptionRow, bps: number, price: number, con
     detectedAt:            new Date().toISOString(),
     serviceUrl:            process.env.CHAINFEED_PUBLIC_URL ?? 'unknown',
   };
+  // DNS-rebind recheck: the URL passed validateWebhookUrl at subscribe time,
+  // but a public name can resolve to a private IP now. Re-verify before we
+  // send — fail closed (skip + retry) rather than POST into the private net.
+  const egress = await assertPublicEgress(new URL(sub.webhookUrl).hostname);
+  if (!egress.ok) {
+    log.warn(`webhook ${sub.ID} → ${sub.webhookUrl}: blocked egress — ${egress.reason}`);
+    return false;
+  }
+
   // Decrypt at the latest possible moment; secret stays in memory only for
   // the lifetime of this signWebhook call.
   const plainSecret = decryptSecret(sub.hmacSecretHex);

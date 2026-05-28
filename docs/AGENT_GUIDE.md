@@ -206,12 +206,20 @@ Minimal example, using the typed wrapper:
 ```ts
 import { connectMcp } from '../shared/chainfeed-client.js';
 
-const mcp = await connectMcp({ url: 'http://127.0.0.1:4005/mcp' });
+const mcp = await connectMcp({
+  url: 'http://127.0.0.1:4005/mcp',
+  authToken: process.env.MCP_AUTH_TOKEN, // required when the server has MCP_AUTH_TOKEN set
+});
 const assessment = await mcp.assessStable('USDM');
 console.log(`${assessment.symbol}: ${assessment.verdict}`);
 console.log(`headline: ${assessment.headline}`);
 await mcp.close();
 ```
+
+> The MCP HTTP transport is bearer-authenticated when `MCP_AUTH_TOKEN` is set on
+> the server (and mandatory in production). Pass the same token via `authToken`;
+> requests without a matching `Authorization: Bearer <token>` get 401. `/healthz`
+> stays open for liveness probes.
 
 Or use the raw SDK if you need tools beyond the typed wrapper:
 
@@ -220,7 +228,10 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 
 const client = new Client({ name: 'my-agent', version: '0.0.1' });
-await client.connect(new StreamableHTTPClientTransport(new URL('http://127.0.0.1:4005/mcp')));
+await client.connect(new StreamableHTTPClientTransport(
+  new URL('http://127.0.0.1:4005/mcp'),
+  { requestInit: { headers: { Authorization: `Bearer ${process.env.MCP_AUTH_TOKEN}` } } },
+));
 const { tools } = await client.listTools();
 const result = await client.callTool({ name: 'get_lending_health', arguments: {} });
 ```
