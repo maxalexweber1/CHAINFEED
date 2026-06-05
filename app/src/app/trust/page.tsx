@@ -19,7 +19,7 @@ export default function TrustPage() {
           title="On-chain provenance"
           body={[
             'Every price quote attaches the tx hashes of the source UTxOs.',
-            'For oracles (Charli3, Orcfax): the feed-update tx that produced the datum we decoded.',
+            'For oracles (Orcfax): the feed-update tx that produced the datum we decoded.',
             'For DEX pools: the latest pool-state tx whose reserves we read.',
             'Re-fetch any tx via a Cardano node and confirm we read the same datum bytes.',
           ]}
@@ -49,7 +49,6 @@ export default function TrustPage() {
           title="Reserve attestation"
           body={[
             'For every Cardano-native stable, CHAINFEED surfaces the reserves source distinctly.',
-            'On-chain attestation (USDM via Charli3 ODV): datum decoded from the publisher\'s feed UTxO.',
             'On-chain collateral aggregate (DJED, Indigo CDPs): sum of ADA at the protocol\'s reserve / CDP-manager script.',
             'Off-chain hash-sealed PDF (USDCx via Circle\'s Deloitte report): sha256 over the bytes, URL pinned.',
           ]}

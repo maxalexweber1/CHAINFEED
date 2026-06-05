@@ -102,13 +102,15 @@ t('liveSince is a parseable ISO date', () => {
 });
 
 t('reservesPair coverage by stable type', () => {
-  // On-chain attestation (Charli3 ODV)
-  assert.equal(STABLE_METADATA.USDM!.reservesPair, 'USDM-RESERVES');
   // On-chain collateral aggregate
   assert.equal(STABLE_METADATA.DJED!.reservesPair, 'DJED-RESERVES');
   assert.equal(STABLE_METADATA.iUSD!.reservesPair, 'iUSD-COLLATERAL');
   // Off-chain Circle attestation (Sprint 2 Day 9)
   assert.equal(STABLE_METADATA.USDCx!.reservesPair, 'USDCx-ATTESTATION');
+  // USDM: its on-chain attestation was the Charli3 ODV `USDM-RESERVES` feed,
+  // removed when Charli3 shut down (2026-06). No replacement source today, so
+  // it now joins USDA under `reserves-unsubstantiated`.
+  assert.equal(STABLE_METADATA.USDM!.reservesPair, undefined);
   // USDA: Anzens / BitGo publish no fetchable attestation today —
   // `reserves-unsubstantiated` alert flags the gap to consumers.
   assert.equal(STABLE_METADATA.USDA!.reservesPair, undefined);

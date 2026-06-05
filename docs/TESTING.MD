@@ -17,8 +17,6 @@ npx tsx scripts/test-response-signing.ts       # 19/19 (Ed25519 sign+verify, can
 # Oracle adapters
 npx tsx scripts/test-orcfax-decode.ts          #  7/7
 npx tsx scripts/test-orcfax-integration.ts     #  5/5
-npx tsx scripts/test-charli3-decode.ts         # 15/15
-npx tsx scripts/test-charli3-integration.ts    # 10/10 (incl. USDM-RESERVES attestation)
 
 # DEX adapters (direct pool reads, no aggregator)
 npx tsx scripts/test-minswap-v2.ts             # 14/14 (paginated Koios, asset-name disambig, sanity band)
@@ -64,7 +62,6 @@ npx tsx scripts/smoke-wingriders-stableswap.ts # Stable-stable reserve-ratio cro
 
 # Chain-dependent — need bridge configured
 npx tsx scripts/smoke-odatano.ts               # ODATANO bridge connection ping
-npx tsx scripts/smoke-charli3.ts [pair…]       # Charli3 feeds: sister NFTs, decoded price, isStale
 npx tsx scripts/smoke-djed-reserves.ts         # Coti DJED reserve script: ADA collateral + coverage ratio (mainnet)
 npx tsx scripts/smoke-indigo-cdp.ts            # Indigo CDP aggregator: ~500 CDPs via Koios (mainnet)
 npx tsx scripts/smoke-minswap-v2.ts            # Minswap V2 direct pool reads (paginated Koios, mainnet)
@@ -121,6 +118,6 @@ on-chain.
 ```
 
 `sourcesUsed` varies by pair and configured network — on mainnet
-ADA-USDM aggregates over orcfax + charli3 + sundae + minswap-v2 +
-wingriders (5 sources), on preprod the on-chain oracles dominate
-(orcfax + charli3) since most DEXes are mainnet-only.
+ADA-USDM aggregates over orcfax + sundae + minswap-v2 + wingriders
+(4 sources), on preprod the orcfax on-chain oracle dominates since
+most DEXes are mainnet-only.

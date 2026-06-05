@@ -16,7 +16,8 @@
  *
  * No preview/preprod entries — V3 is mainnet-only as of 2026-05-05. If a
  * test deployment ships, add it under `preview` / `preprod` keys following
- * the same shape (charli3-style network-override resolution).
+ * the same shape (FLUIDTOKENS_NETWORK || NETWORK override resolution, see
+ * `resolveFluidNetwork()` below).
  */
 
 export type FluidNetwork = 'mainnet';
@@ -76,7 +77,7 @@ export const FLUIDTOKENS_CONFIG: Readonly<Record<FluidNetwork, FluidNetworkConfi
 } as const satisfies Readonly<Record<FluidNetwork, FluidNetworkConfig>>);
 
 /**
- * Resolve the active FluidTokens network. Charli3-style override:
+ * Resolve the active FluidTokens network. Override precedence:
  *   FLUIDTOKENS_NETWORK > NETWORK > 'mainnet' (the only deployed network).
  * Throws on any value other than 'mainnet' so a stray `NETWORK=preview`
  * env doesn't silently produce empty results.

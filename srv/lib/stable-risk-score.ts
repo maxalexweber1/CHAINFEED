@@ -136,8 +136,9 @@ export function reserveAdequacyScore(inputs: Pick<RiskScoreInputs, 'reservesKind
   } else {
     score = clamp01(coverage * 0.5);
   }
-  // Off-chain proofs cap at 0.85 — the on-chain audit-trail for USDM-RESERVES
-  // is fundamentally more verifiable than a PDF behind a CDN.
+  // Off-chain proofs cap at 0.85 — an on-chain attestation audit-trail (e.g.
+  // DJED/iUSD reserve feeds) is fundamentally more verifiable than a PDF
+  // behind a CDN.
   if (reservesKind === 'off-chain-pdf') score = Math.min(score, 0.85);
   return score;
 }

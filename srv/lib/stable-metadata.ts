@@ -51,8 +51,8 @@ export interface StableMetadata {
   pegPair: string;
   /**
    * Optional pair name carrying the on-chain reserves attestation feed for
-   * this stable, e.g. `USDM-RESERVES` (Charli3 ODV). Off-chain attestations
-   * (Circle USDCx, BitGo USDA) are wired separately in the off-chain scraper.
+   * this stable, e.g. `DJED-RESERVES` (on-chain reserve script). Off-chain
+   * attestations (Circle USDCx) are wired separately in the off-chain scraper.
    */
   reservesPair?: string;
 }
@@ -73,7 +73,11 @@ export const STABLE_METADATA: Readonly<Record<string, StableMetadata>> = Object.
     decimals:    6,
     liveSince:   '2024-03-17',
     pegPair:     'ADA-USDM',
-    reservesPair:'USDM-RESERVES',   // Charli3 ODV attestation feed
+    // No reservesPair as of 2026-06 — USDM's on-chain reserve attestation was
+    // the Charli3 ODV `USDM-RESERVES` feed, removed when Charli3 shut down.
+    // Mehen publishes no other fetchable proof-of-reserve, so USDM now falls
+    // under the `reserves-unsubstantiated` alert (same as USDA). Re-add a
+    // reservesPair if a replacement attestation source is wired.
   },
   DJED: {
     symbol:      'DJED',

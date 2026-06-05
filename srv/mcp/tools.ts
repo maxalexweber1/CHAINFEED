@@ -171,7 +171,7 @@ export const CHAINFEED_TOOLS: ChainfeedTool[] = [
       + 'cover it, with a confidence score and peg-deviation (when one side is a USD-pegged stable). '
       + 'USE FOR "what is X worth right now?", "ADA-USD price", "how much is DJED in ADA?". '
       + 'NOT FOR per-venue dislocation (use get_arbitrage) or stablecoin safety (use assess_stable). '
-      + 'Pair convention X-Y = "Y per 1 X". Examples: ADA-USD, ADA-USDM, ADA-DJED, BTC-ADA, NIGHT-ADA. '
+      + 'Pair convention X-Y = "Y per 1 X". Examples: ADA-USD, ADA-USDM, ADA-DJED, NIGHT-ADA. '
       + '**x402-gated** (paid endpoint — call buildPaymentTx first if you don\'t already hold a payment receipt).',
     inputSchema: { pair: z.string().describe('Pair name, e.g. ADA-USD or ADA-USDM') },
     run: (args, ctx) => callAction(ctx, 'getBestPrice', { pair: String(args.pair ?? '') }),
@@ -255,7 +255,7 @@ export const CHAINFEED_TOOLS: ChainfeedTool[] = [
       'Operational liveness snapshot: per-adapter cache state, last fetch age per pair, in-flight '
       + 'refresh markers, last error per source. Pure in-memory read — never triggers a fetch. '
       + 'USE FOR operational / debugging questions: "is the orcfax source down?", "when was the last '
-      + 'successful Charli3 fetch?", "which adapter is stale?". '
+      + 'successful minswap-v2 fetch?", "which adapter is stale?". '
       + 'NOT FOR pricing or stable-safety questions — use get_best_price or assess_stable for those.',
     inputSchema: {},
     run: (_args, ctx) => callAction(ctx, 'getServiceStatus', {}),

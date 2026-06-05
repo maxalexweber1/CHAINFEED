@@ -109,7 +109,7 @@ t('aggregate: throws when no usable quotes', () =>
 t('aggregate: single source → confidence capped, deviation 0', () => {
   // Math primitive `confidence([x])` is 1.0, but the aggregator caps single
   // -source aggregates to SINGLE_SOURCE_CONFIDENCE_CAP — a degraded fanout
-  // shouldn't claim full confidence (see Charli3-only pairs like NIGHT-ADA).
+  // shouldn't claim full confidence (e.g. when only one adapter survives).
   const r = aggregate([{ price: 0.4813 }]);
   assert.equal(r.sourcesUsed, 1);
   assert.equal(r.price, 0.4813);

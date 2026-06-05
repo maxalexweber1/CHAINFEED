@@ -72,7 +72,7 @@ Register the stdio server with Claude Code (`.mcp.json`):
 
 | Symbol | Backing | Issuer | Reserves source |
 |---|---|---|---|
-| **USDM** | fiat-custodial | Mehen | Charli3 ODV — `USDM-RESERVES` |
+| **USDM** | fiat-custodial | Mehen | gap — Charli3 attestation retired, no replacement today |
 | **DJED** | overcollateralized-ada | Coti | on-chain reserve script — `DJED-RESERVES` |
 | **iUSD** | overcollateralized-cdp | Indigo Protocol | CDP-manager aggregate — `iUSD-COLLATERAL` |
 | **USDA** | fiat-custodial | Anzens / EMURGO (BitGo Trust) | gap — no public attestation today |
@@ -84,15 +84,15 @@ Wanchain-bridged USDT/USDC are out of scope (no liquid direct DEX pool today).
 
 | Pair | Sources |
 |---|---|
-| ADA-USD     | orcfax + charli3 + minswap |
-| ADA-USDM    | orcfax + charli3 + sundae + minswap-v2 + wingriders |
+| ADA-USD     | orcfax + minswap |
+| ADA-USDM    | orcfax + sundae + minswap-v2 + wingriders |
 | ADA-USDA    | minswap-v2 + wingriders |
 | ADA-DJED    | orcfax + minswap-v2 + wingriders |
 | ADA-iUSD    | orcfax + minswap-v2 + wingriders |
 | ADA-USDCx   | sundae + minswap-v2 |
-| BTC-ADA     | charli3 (mainnet, single-source — confidence capped at 0.5) |
-| BTC-USD     | charli3 (preprod, single-source) |
-| NIGHT-ADA   | charli3 + sundae + wingriders |
+| NIGHT-ADA   | sundae + wingriders |
+
+> **Charli3 deferred (2026-06):** Charli3 shut down, so its feeds were removed. BTC-ADA / BTC-USD had no other source and are gone; USDM lost its on-chain reserve attestation and now reports `reserves-unsubstantiated`.
 
 ### Lending markets
 
@@ -132,7 +132,7 @@ Writing your own validator instead of using the reference stop_loss → [`contra
                                         │  └─┬──────────────┬───────────────────┘  │
                                         │ ┌──▼──────────┐ ┌─▼───────────────────┐  │
                                         │ │ aggregation │ │ adapters/registry   │  │
-                                        │ │ median/conf │ │   orcfax · charli3  │  │
+                                        │ │ median/conf │ │   orcfax            │  │
                                         │ │ pegDevBps   │ │   minswap{,-v2}     │  │
                                         │ │ twap/ohlcv  │ │   sundae · wingrdrs │  │
                                         │ └─────────────┘ │   djed · indigo     │  │

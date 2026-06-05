@@ -75,29 +75,22 @@ function buildDeps(overrides: Partial<StableHealthDeps>): StableHealthDeps {
 async function main() {
 console.log('stable-health orchestration ─────────────────────────────');
 
-// ── happy path: USDM (on-chain attestation, fiat-custodial) ──────────
-await t('USDM: on-chain attestation + 2x cover + fresh + 3 sources → score ≥ 0.85', async () => {
+// ── USDM: reserves unsubstantiated since Charli3 retired ─────────────
+// USDM's only on-chain reserve attestation was the Charli3 ODV `USDM-RESERVES`
+// feed, removed when Charli3 shut down (2026-06). Mehen publishes no fetchable
+// replacement, so USDM now degrades to the same `reserves-unsubstantiated`
+// state as USDA — price still aggregates, reserves section reports "no source".
+await t('USDM: no reserves source → reserves unavailable + reserves-unsubstantiated alert', async () => {
   const FROZEN_NOW = 1_800_000_000_000;
   const deps = buildDeps({
     fanout: async (pair: string) => {
       if (pair === 'ADA-USDM') return { quotes: [
         priceQuote('orcfax',  'ADA-USDM', 0.247, FROZEN_NOW - 60_000),
-        priceQuote('charli3', 'ADA-USDM', 0.2475, FROZEN_NOW - 30_000),
-        priceQuote('sundae',  'ADA-USDM', 0.246,  FROZEN_NOW - 10_000),
+        priceQuote('sundae',  'ADA-USDM', 0.246, FROZEN_NOW - 10_000),
       ], errors: [] };
       if (pair === 'ADA-USD') return { quotes: [
         priceQuote('orcfax', 'ADA-USD', 0.247),
         priceQuote('minswap', 'ADA-USD', 0.2469),
-        priceQuote('charli3', 'ADA-USD', 0.2471),
-      ], errors: [] };
-      return emptyFanout();
-    },
-    attestationFanout: async (pair: string) => {
-      if (pair === 'USDM-RESERVES') return { quotes: [
-        attestQuote('charli3', 'USDM-RESERVES', 30_000_000, 'usd', {
-          ts: FROZEN_NOW - 2 * 60 * 60 * 1000,    // 2h fresh
-          txHash: 'aa'.repeat(32),
-        }),
       ], errors: [] };
       return emptyFanout();
     },
@@ -115,38 +108,29 @@ await t('USDM: on-chain attestation + 2x cover + fresh + 3 sources → score ≥
   assert.equal(r.metadata.backing, 'fiat-custodial');
   assert.equal(r.metadata.issuerName, 'Mehen');
 
-  // Price block — median of [0.246, 0.247, 0.2475] = 0.247
+  // Price block — median of [0.246, 0.247] still aggregates across survivors.
   assert.equal(r.price.available, true);
-  assert.equal(r.price.sourcesUsed, 3);
-  assert.ok(r.price.value !== null && Math.abs(r.price.value - 0.247) < 0.001);
+  assert.equal(r.price.sourcesUsed, 2);
+  assert.ok(r.price.value !== null && Math.abs(r.price.value - 0.2465) < 0.001);
 
-  // Reserves block
-  assert.equal(r.reserves.available, true);
-  assert.equal(r.reserves.source, 'on-chain-attestation');
-  assert.equal(r.reserves.unit, 'usd');
-  assert.equal(r.reserves.value, 30_000_000);
-  assert.equal(r.reserves.txHash, 'aa'.repeat(32));
-  // age ~ 2h
-  assert.ok(r.reserves.ageMs !== null && Math.abs(r.reserves.ageMs - 2*60*60*1000) < 1000);
+  // Reserves block — no source, degrades cleanly (no throw, no 5xx).
+  assert.equal(r.reserves.available, false);
+  assert.equal(r.reserves.source, null);
+  assert.equal(r.reserves.value, null);
 
   // Supply block
   assert.equal(r.supply.available, true);
   assert.equal(r.supply.circulatingSupply, 14_500_000);
 
-  // No liquidity dep injected → placeholder
-  assert.equal(r.liquidity.available, false);
-  assert.equal(r.liquidity.depthAda, null);
+  // The reserves gap is surfaced explicitly to consumers.
+  assert.ok(r.alerts.includes('reserves-unsubstantiated'),
+    `expected reserves-unsubstantiated, got: ${r.alerts.join(',')}`);
 
-  // Risk score: ideal-ish (all components high)
-  assert.ok(r.risk.score >= 0.85, `expected ≥ 0.85, got ${r.risk.score}`);
-  // Components present and within [0, 1]
+  // reserveAdequacy falls to the neutral-missing baseline (0.5).
+  assert.equal(r.risk.reserveAdequacy.value, 0.5);
   for (const c of [r.risk.pegConfidence, r.risk.reserveAdequacy, r.risk.attestationFreshness, r.risk.sourceConfidence]) {
     assert.ok(c.value >= 0 && c.value <= 1);
   }
-
-  // No critical alerts
-  assert.equal(r.alerts.includes('peg-deviation-critical'), false);
-  assert.equal(r.alerts.includes('reserves-unsubstantiated'), false);
 });
 
 // ── happy path: DJED (collateral aggregate, overcollateralized) ──────
@@ -230,10 +214,6 @@ await t('off-peg by 200 bps → pegDeviationBps surfaces + peg-deviation-high al
       ], errors: [] };
       return emptyFanout();
     },
-    attestationFanout: async () => ({
-      quotes: [attestQuote('charli3', 'USDM-RESERVES', 14_500_000, 'usd', { ts: Date.now() - 60_000 })],
-      errors: [],
-    }),
     fetchSupply: async () => ({ totalSupply: 14_500_000, circulatingSupply: 14_500_000, source: 'minswap-metrics', fetchedAt: Date.now() }),
   });
 
@@ -253,10 +233,6 @@ await t('price fanout rejects → price.available=false, no throw', async () => 
       if (pair === 'ADA-USD')  return { quotes: [priceQuote('orcfax', 'ADA-USD', 0.247)], errors: [] };
       return emptyFanout();
     },
-    attestationFanout: async () => ({
-      quotes: [attestQuote('charli3', 'USDM-RESERVES', 14_500_000, 'usd')],
-      errors: [],
-    }),
   });
   const r = await computeStableHealth(STABLE_METADATA.USDM!, deps);
   assert.equal(r.price.available, false);
@@ -274,7 +250,9 @@ await t('attestation fanout rejects → reserves.available=false', async () => {
     attestationFanout: async () => { throw new Error('koios-down'); },
     fetchSupply: async () => ({ totalSupply: 14_500_000, circulatingSupply: 14_500_000, source: 'minswap-metrics', fetchedAt: Date.now() }),
   });
-  const r = await computeStableHealth(STABLE_METADATA.USDM!, deps);
+  // DJED still has an on-chain reserves source (DJED-RESERVES), so this
+  // exercises the rejection path; a fanout throw degrades it to unavailable.
+  const r = await computeStableHealth(STABLE_METADATA.DJED!, deps);
   assert.equal(r.reserves.available, false);
   // Price still works
   assert.equal(r.price.available, true);
@@ -286,12 +264,12 @@ await t('supply fetcher rejects → supply.available=false, rest still works', a
       quotes: [priceQuote('orcfax', pair, 0.247)], errors: [],
     }),
     attestationFanout: async () => ({
-      quotes: [attestQuote('charli3', 'USDM-RESERVES', 14_500_000, 'usd', { ts: Date.now() - 60_000 })],
+      quotes: [attestQuote('djed-reserves', 'DJED-RESERVES', 260, 'ratio_pct', { ts: Date.now() - 60_000 })],
       errors: [],
     }),
     fetchSupply: async () => { throw new Error('minswap-down'); },
   });
-  const r = await computeStableHealth(STABLE_METADATA.USDM!, deps);
+  const r = await computeStableHealth(STABLE_METADATA.DJED!, deps);
   assert.equal(r.supply.available, false);
   assert.equal(r.price.available, true);
   assert.equal(r.reserves.available, true);
@@ -356,10 +334,6 @@ await t('liquidity probe wired in → liquidity block populated', async () => {
   const deps = buildDeps({
     fanout: async (pair: string) => ({
       quotes: [priceQuote('orcfax', pair, 0.247)], errors: [],
-    }),
-    attestationFanout: async () => ({
-      quotes: [attestQuote('charli3', 'USDM-RESERVES', 14_500_000, 'usd', { ts: Date.now() - 60_000 })],
-      errors: [],
     }),
     fetchSupply: async () => ({ totalSupply: 14_500_000, circulatingSupply: 14_500_000, source: 'minswap-metrics', fetchedAt: Date.now() }),
     fetchLiquidityDepth: async (tokenId: string) => {

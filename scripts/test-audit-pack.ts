@@ -94,7 +94,7 @@ t('three sources → three distinct files (one per source)', () => {
     quoteFixture(),
     [
       sourceFixture({ sourceName: 'orcfax',  txHash: 'aa'.repeat(32) }),
-      sourceFixture({ sourceName: 'charli3', txHash: 'bb'.repeat(32) }),
+      sourceFixture({ sourceName: 'sundae',  txHash: 'bb'.repeat(32) }),
       sourceFixture({ sourceName: 'minswap', txHash: '' }),
     ],
     CTX,
@@ -102,7 +102,7 @@ t('three sources → three distinct files (one per source)', () => {
   assert.equal(e.summary.perSourceFiles.length, 3);
   assert.deepEqual(
     e.summary.perSourceFiles.sort(),
-    ['sources/charli3.json', 'sources/minswap.json', 'sources/orcfax.json'],
+    ['sources/minswap.json', 'sources/orcfax.json', 'sources/sundae.json'],
   );
 });
 
@@ -168,7 +168,7 @@ t('aggregator-meta.json carries all quote fields', () => {
 
 t('aggregator-meta.json: pegDeviationBps null when not a stable pair', () => {
   const e = buildAuditPack(
-    quoteFixture({ pair: 'BTC-ADA', pegDeviationBps: null }),
+    quoteFixture({ pair: 'NIGHT-ADA', pegDeviationBps: null }),
     [sourceFixture()],
     CTX,
   );
@@ -180,7 +180,7 @@ t('aggregator-meta.json: pegDeviationBps null when not a stable pair', () => {
 t('every file has a checksum entry', () => {
   const e = buildAuditPack(
     quoteFixture(),
-    [sourceFixture({ sourceName: 'orcfax' }), sourceFixture({ sourceName: 'charli3' })],
+    [sourceFixture({ sourceName: 'orcfax' }), sourceFixture({ sourceName: 'sundae' })],
     CTX,
   );
   for (const name of Object.keys(e.files)) {
@@ -199,7 +199,7 @@ t('checksums are correct sha256 of file bodies', () => {
 
 // ── verifyAuditPack ─────────────────────────────────────────────────
 t('verifyAuditPack: well-formed pack → empty mismatch array', () => {
-  const e = buildAuditPack(quoteFixture(), [sourceFixture(), sourceFixture({ sourceName: 'charli3' })], CTX);
+  const e = buildAuditPack(quoteFixture(), [sourceFixture(), sourceFixture({ sourceName: 'sundae' })], CTX);
   assert.deepEqual(verifyAuditPack(e), []);
 });
 
@@ -233,7 +233,7 @@ t('summary collects auditTxHashes from sources, skipping empty', () => {
     quoteFixture(),
     [
       sourceFixture({ sourceName: 'orcfax',     txHash: 'aa'.repeat(32) }),
-      sourceFixture({ sourceName: 'charli3',    txHash: 'bb'.repeat(32) }),
+      sourceFixture({ sourceName: 'wingriders', txHash: 'bb'.repeat(32) }),
       sourceFixture({ sourceName: 'minswap',    txHash: '' }),
       sourceFixture({ sourceName: 'sundae',     txHash: '' }),
     ],
@@ -254,7 +254,7 @@ t('summary numeric fields match aggregator-meta', () => {
 t('full round-trip: build → JSON.stringify → JSON.parse → verifyAuditPack passes', () => {
   const e1 = buildAuditPack(
     quoteFixture(),
-    [sourceFixture({ sourceName: 'orcfax' }), sourceFixture({ sourceName: 'charli3' })],
+    [sourceFixture({ sourceName: 'orcfax' }), sourceFixture({ sourceName: 'sundae' })],
     CTX,
   );
   const wire = JSON.stringify(e1);

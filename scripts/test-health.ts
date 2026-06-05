@@ -42,7 +42,7 @@ function mkAdapterStatus(name: string, opts: { hasError?: boolean; cold?: boolea
 function baseDeps(overrides: Partial<HealthDeps> = {}): HealthDeps {
   return {
     pingDb:             async () => 5,
-    getAdapterStatuses: () => [mkAdapterStatus('orcfax'), mkAdapterStatus('charli3')],
+    getAdapterStatuses: () => [mkAdapterStatus('orcfax'), mkAdapterStatus('sundae')],
     readHeartbeat:      async () => ({ tickAt: '2026-05-26T09:59:30.000Z', intervalMs: 60_000 }),
     now:                () => NOW,
     uptimeSec:          () => 3600,
@@ -95,7 +95,7 @@ async function main() {
     const r = await buildHealthReport(baseDeps({
       getAdapterStatuses: () => [
         mkAdapterStatus('orcfax', { cold: true }),
-        mkAdapterStatus('charli3', { cold: true }),
+        mkAdapterStatus('sundae', { cold: true }),
       ],
     }));
     assert.equal(r.checks.adapters.status, 'unknown');
@@ -107,7 +107,7 @@ async function main() {
     const r = await buildHealthReport(baseDeps({
       getAdapterStatuses: () => [
         mkAdapterStatus('orcfax'),
-        mkAdapterStatus('charli3', { hasError: true }),
+        mkAdapterStatus('sundae', { hasError: true }),
       ],
     }));
     assert.equal(r.checks.adapters.status, 'degraded');
@@ -146,12 +146,12 @@ async function main() {
     const r = await buildHealthReport(baseDeps({
       getAdapterStatuses: () => [
         mkAdapterStatus('orcfax'),
-        mkAdapterStatus('charli3', { hasError: true }),
+        mkAdapterStatus('sundae', { hasError: true }),
         mkAdapterStatus('minswap', { cold: true }),
       ],
     }));
     assert.equal(r.checks.adapters.byAdapter.orcfax,  'ok');
-    assert.equal(r.checks.adapters.byAdapter.charli3, 'degraded');
+    assert.equal(r.checks.adapters.byAdapter.sundae, 'degraded');
     assert.equal(r.checks.adapters.byAdapter.minswap, 'cold');
   });
 

@@ -14,8 +14,8 @@
  * upstream Koios/Blockfrost outage — events stop, polling stays.
  *
  * Migration status: Indigo CDP, DJED reserves, Minswap V2 (asset-filtered),
- * Charli3 (5 per-pair address watches), Orcfax FS UTxO, FluidTokens pool +
- * loan credentials, Liqwid 3 stable markets — all wired event-driven.
+ * Orcfax FS UTxO, FluidTokens pool + loan credentials, Liqwid 3 stable
+ * markets — all wired event-driven.
  * Add new credentials/addresses by appending to `WATCHED_CREDENTIALS` /
  * `WATCHED_ADDRESSES` and registering a tag → source mapping.
  */
@@ -108,20 +108,10 @@ interface WatchedAddressConfig {
   coalesceMs?: number;
 }
 
-// Charli3 + Orcfax both publish to per-feed script addresses (not a
-// shared credential). Each entry below maps one feed-address to the
-// adapter source-name whose cache should be invalidated when that feed
-// updates. Multiple Charli3 entries share the `charli3` tag because
-// `invalidateSource('charli3')` clears the cache for ALL pairs in one
-// shot — finer per-pair invalidation isn't worth the dispatch-map
-// complexity right now (the cache hit rate stays > 95% either way).
+// Orcfax publishes to a per-feed script address (not a shared credential).
+// Each entry below maps one feed-address to the adapter source-name whose
+// cache should be invalidated when that feed updates.
 const WATCHED_ADDRESSES: WatchedAddressConfig[] = [
-  // Charli3 mainnet feeds
-  { address: 'addr1wyvxns52tsgz8ggvrh4np5gjyfk0g5fshqq2ytvu9t7pe8qp3adw6', description: 'Charli3 ADA-USD legacy feed', tag: 'charli3', invalidateSourceName: 'charli3' },
-  { address: 'addr1w98dq70hqh8we52jgnck535n277ajkz7pg9cpk275lkyt9gjjc97g', description: 'Charli3 ADA-USDM legacy feed', tag: 'charli3', invalidateSourceName: 'charli3' },
-  { address: 'addr1wyujem6fwxju9arc45lm98z0uwgwm0t8aerjp5mgahpgx7snfcpuu', description: 'Charli3 BTC-ADA legacy feed', tag: 'charli3', invalidateSourceName: 'charli3' },
-  { address: 'addr1w8z46wa8ajgqj5zy90nrjp2hd4ssjtuuunpcuyfpplex4nclv9peu', description: 'Charli3 NIGHT-ADA legacy feed', tag: 'charli3', invalidateSourceName: 'charli3' },
-  { address: 'addr1w88fmwyufz9vdqkukzhaerjxcfm488wsnyrft9cpjtd4utsnw5ym7', description: 'Charli3 USDM-RESERVES ODV feed', tag: 'charli3', invalidateSourceName: 'charli3' },
   // Orcfax mainnet FS UTxO script — one address covers every FS publication
   { address: 'addr1wyvnaejjzxanknsw5hm4raq4y6f4tfjsut3hqmmztn035jc4rpcfn', description: 'Orcfax FS UTxO script (mainnet)', tag: 'orcfax', invalidateSourceName: 'orcfax' },
   // Liqwid v2 stable MarketState UTxOs (one singleton per market). 60s
@@ -192,7 +182,7 @@ export async function registerWatchSubscriptions(): Promise<void> {
     }
   }
 
-  // 2. Register every address watch (Charli3 per-pair feeds, Orcfax FS).
+  // 2. Register every address watch (Orcfax FS, Liqwid MarketState singletons).
   for (const cfg of WATCHED_ADDRESSES) {
     try {
       await adminSrv.addWatchedAddress({

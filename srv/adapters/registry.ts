@@ -3,8 +3,8 @@
  *
  * Each adapter is wrapped with the cache layer so the aggregation path
  * does at most one upstream fetch per (source, pair) per TTL window. TTLs
- * are per-source — chain reads (Orcfax / Charli3) are slow + cheap to
- * cache; DEX HTTP APIs are fast but rate-limited, so a shorter TTL is fine.
+ * are per-source — chain reads (Orcfax) are slow + cheap to cache; DEX HTTP
+ * APIs are fast but rate-limited, so a shorter TTL is fine.
  *
  * Adding a new source = `import` it here, wrap it, push it into ALL_SOURCES.
  * Aggregation reads the registry directly — no other code needs to change.
@@ -21,7 +21,6 @@ import { withCache, type CachedAdapter, type CacheStatus } from '../lib/cache';
 import { isAttestationQuote, isPriceQuote, type PriceAdapter, type PriceQuote, type AttestationQuote } from './types';
 
 import orcfax from './orcfax';
-import charli3 from './charli3';
 import minswap from './minswap';
 import minswapV2 from './minswap-v2';
 import sundaeswap from './sundaeswap';
@@ -46,7 +45,6 @@ const cacheLog = (level: string, msg: string): void => {
 // DEX endpoints serve from server-side caches with sub-second freshness;
 // 10s gives us 6 calls/min/pair, well under any documented quota.
 const orcfaxCached = withCache(orcfax, { ttlMs: 30_000, log: cacheLog });
-const charli3Cached = withCache(charli3, { ttlMs: 30_000, log: cacheLog });
 const minswapCached = withCache(minswap, { ttlMs: 10_000, log: cacheLog });
 // Minswap V2 reads ~3.2k pool UTxOs via paginated Koios — heavier than the
 // other DEX adapters but the in-adapter snapshot cache (also 30s) means
@@ -86,7 +84,7 @@ const liqwidCached = withCache(liqwid, { ttlMs: 300_000, log: cacheLog });
 // Update both `ALL_SOURCES` and the `ORACLE_SOURCE_NAMES` set when adding
 // either kind of non-DEX source.
 const ORACLE_SOURCE_NAMES: ReadonlySet<string> = new Set([
-  'orcfax', 'charli3', 'djed-reserves', 'indigo-cdp', 'circle-usdc-attestation',
+  'orcfax', 'djed-reserves', 'indigo-cdp', 'circle-usdc-attestation',
   'fluidtokens', 'liqwid',
 ]);
 
@@ -96,7 +94,7 @@ const ORACLE_SOURCE_NAMES: ReadonlySet<string> = new Set([
  * `ALL_SOURCES` directly — no other code change needed.
  */
 export const ALL_SOURCES: PriceAdapter[] = [
-  orcfaxCached, charli3Cached, minswapCached, minswapV2Cached, sundaeswapCached,
+  orcfaxCached, minswapCached, minswapV2Cached, sundaeswapCached,
   wingridersCached, wingridersStableswapCached,
   djedReservesCached, indigoCdpCached, circleUsdcAttestationCached, fluidtokensCached,
   liqwidCached,
@@ -107,7 +105,7 @@ export const ALL_SOURCES: PriceAdapter[] = [
  * status endpoint) can introspect cache state without a runtime check.
  */
 const ALL_CACHED_SOURCES: CachedAdapter[] = [
-  orcfaxCached, charli3Cached, minswapCached, minswapV2Cached, sundaeswapCached,
+  orcfaxCached, minswapCached, minswapV2Cached, sundaeswapCached,
   wingridersCached, wingridersStableswapCached,
   djedReservesCached, indigoCdpCached, circleUsdcAttestationCached, fluidtokensCached,
   liqwidCached,
@@ -176,7 +174,7 @@ export function dexSourcesForPair(pair: string): PriceAdapter[] {
 
 /**
  * Fan out across all sources that support `pair`, returning only `PriceQuote`s.
- * Attestation quotes (e.g. USDM-RESERVES) are filtered out — they go through
+ * Attestation quotes (e.g. DJED-RESERVES) are filtered out — they go through
  * `attestationFanout()`. Does NOT throw if everyone fails — caller decides
  * the HTTP code (502 vs partial success).
  */
@@ -223,7 +221,7 @@ export async function fanoutDexOnly(pair: string): Promise<FanoutResult> {
 }
 
 /**
- * Attestation fanout — collect non-price quotes (e.g. USDM-RESERVES).
+ * Attestation fanout — collect non-price quotes (e.g. DJED-RESERVES).
  * Mirror shape of fanout() so callers can use the same error-aware pattern.
  */
 export async function attestationFanout(pair: string): Promise<AttestationFanoutResult> {

@@ -72,7 +72,7 @@ Multi-source aggregated quote with peg deviation for stables.
 }
 ```
 
-`pegDeviationBps` is null for non-USD-stable pairs (BTC-ADA, NIGHT-ADA, ADA-USD itself).
+`pegDeviationBps` is null for non-USD-stable pairs (NIGHT-ADA, ADA-USD itself).
 
 ### `POST /getTWAP`
 

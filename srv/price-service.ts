@@ -9,10 +9,10 @@
  *   5. Return the canonical `AggregatedPriceResult` shape.
  *
  * Multi-source by default. If the fanout collapses to a single survivor
- * (e.g. Charli3-only pairs like NIGHT-ADA), the aggregator caps the
- * reported confidence at `SINGLE_SOURCE_CONFIDENCE_CAP` so consumers can
- * tell a degraded response apart from a verified one. New adapters slot in
- * via `srv/adapters/registry.ts`; this handler does not change.
+ * (e.g. a pair with only one live adapter, or transient upstream failures),
+ * the aggregator caps the reported confidence at `SINGLE_SOURCE_CONFIDENCE_CAP`
+ * so consumers can tell a degraded response apart from a verified one. New
+ * adapters slot in via `srv/adapters/registry.ts`; this handler does not change.
  *
  * x402 payment gating is wired in `init()` below via `@odatano/x402`'s
  * `gateService(this, …)`. The gate verifies payment before a gated

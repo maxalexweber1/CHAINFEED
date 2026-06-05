@@ -11,7 +11,7 @@
  *   npx tsx scripts/smoke-all.ts
  *
  * Skip categories with env:
- *   SKIP_CHAIN_SMOKES=1   skips bridge-dependent smokes (charli3, djed, indigo)
+ *   SKIP_CHAIN_SMOKES=1   skips bridge-dependent smokes (djed, indigo)
  *   SKIP_HTTP_SMOKES=1    skips HTTP-dependent smokes (dex, liquidity, circle)
  */
 
@@ -42,7 +42,6 @@ const SMOKES: SmokeJob[] = [
   { name: 'liquidity-depth',      file: 'smoke-liquidity-depth.ts',      category: 'chain', parallelSafe: false, timeoutMs: 120_000 },
   { name: 'indigo-cdp',           file: 'smoke-indigo-cdp.ts',           category: 'chain', parallelSafe: false, timeoutMs: 30_000 },
   { name: 'odatano',              file: 'smoke-odatano.ts',              category: 'chain', parallelSafe: false, timeoutMs: 30_000 },
-  { name: 'charli3',              file: 'smoke-charli3.ts',              category: 'chain', parallelSafe: false, timeoutMs: 90_000 },
   { name: 'djed-reserves',        file: 'smoke-djed-reserves.ts',        category: 'chain', parallelSafe: false, timeoutMs: 60_000 },
   // FluidTokens v3 reads ~1100 UTxOs (pools + loans) via two
   // bridge.getUtxosAtCredential calls. Heavier than Indigo; allow 90s.

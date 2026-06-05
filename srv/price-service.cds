@@ -17,7 +17,7 @@ service PriceService {
     deviationPct    : Decimal(8,4);
     // Distance from peg in basis points (positive = above peg, negative = below).
     // Null when the requested pair is not a registered USD-stable
-    // (e.g. BTC-ADA, NIGHT-ADA, ADA-USD itself).
+    // (e.g. NIGHT-ADA, ADA-USD itself).
     pegDeviationBps : Decimal(10,2) null;
     validUntil      : Timestamp;
     auditTxHashes   : array of String;
@@ -82,7 +82,7 @@ service PriceService {
   type StableHealthReservesBlock {
     available    : Boolean;
     // Where did the reserves number come from. One of:
-    // 'on-chain-attestation' (e.g. USDM-RESERVES via Charli3 ODV),
+    // 'on-chain-attestation' (publisher feed UTxO),
     // 'on-chain-collateral-aggregate' (DJED reserve script, Indigo CDPs),
     // 'off-chain-pdf' (Sprint 2 Day 9-10 — Circle / BitGo reports),
     // 'none' (no reserves source for this stable yet).

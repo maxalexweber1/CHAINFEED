@@ -16,7 +16,7 @@
 interface BaseQuoteFields {
   /** e.g. 'orcfax', 'minswap', 'sundaeswap' */
   sourceName: string;
-  /** e.g. 'ADA-USD', 'ADA-USDM', 'USDM-RESERVES' */
+  /** e.g. 'ADA-USD', 'ADA-USDM', 'DJED-RESERVES' */
   pair: string;
   /** epoch milliseconds when the observation was fresh */
   timestamp: number;
